@@ -215,10 +215,7 @@ class EverythingBackend:
         if rc != 0:
             raise RuntimeError(f"Count failed: {stderr.strip() or stdout.strip()}")
 
-        try:
-            return int(stdout.strip())
-        except ValueError:
-            return -1
+        return _parse_es_number(stdout)
 
     async def get_total_size(self, query: str) -> int:
         """Return the total size in bytes of all files matching *query*."""
@@ -233,10 +230,7 @@ class EverythingBackend:
         if rc != 0:
             raise RuntimeError(f"Total size failed: {stderr.strip() or stdout.strip()}")
 
-        try:
-            return int(stdout.strip())
-        except ValueError:
-            return -1
+        return _parse_es_number(stdout)
 
     # ── Health check ──────────────────────────────────────────────────
 
@@ -390,6 +384,20 @@ def _stat_to_result(filepath: str) -> SearchResult | None:
         logger.debug("Failed to stat '%s': %s", filepath, exc)
         # Return a bare result so we at least report the path
         return SearchResult(path=filepath, name=Path(filepath).name or filepath)
+
+
+# es.exe prints unsigned -1 when -get-result-count / -get-total-size cannot
+# produce a value (e.g. unsupported by the connected Everything version).
+_ES_UINT64_ERROR = 2**64 - 1
+
+
+def _parse_es_number(stdout: str) -> int:
+    """Parse a numeric es.exe aggregate result; -1 when unavailable."""
+    try:
+        value = int(stdout.strip())
+    except ValueError:
+        return -1
+    return -1 if value == _ES_UINT64_ERROR else value
 
 
 # ── Query splitting ────────────────────────────────────────────────────────

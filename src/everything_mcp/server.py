@@ -465,7 +465,13 @@ async def everything_count_stats(params: CountStatsInput) -> str:
 
         # Count
         try:
-            output["total_count"] = await backend.count(params.query)
+            total_count = await backend.count(params.query)
+            if total_count >= 0:
+                output["total_count"] = total_count
+            else:
+                output["count_note"] = (
+                    "Count not available (es.exe may not support -get-result-count)"
+                )
         except Exception:
             output["count_note"] = "Count not available (es.exe may not support -get-result-count)"
 
@@ -476,6 +482,8 @@ async def everything_count_stats(params: CountStatsInput) -> str:
                 if total_size >= 0:
                     output["total_size"] = total_size
                     output["total_size_human"] = human_size(total_size)
+                else:
+                    output["size_note"] = "Total size not available"
             except Exception:
                 output["size_note"] = "Total size not available"
 

@@ -400,6 +400,13 @@ class TestEverythingBackend:
             assert "path:C:\\My Docs" in cmd
 
     @pytest.mark.asyncio
+    async def test_count_uint64_error_sentinel(self, backend):
+        """es.exe prints unsigned -1 when the count is unavailable."""
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = (str(2**64 - 1) + "\n", "", 0)
+            assert await backend.count("ext:py") == -1
+
+    @pytest.mark.asyncio
     async def test_count_error(self, backend):
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "error", 1)
@@ -415,6 +422,13 @@ class TestEverythingBackend:
             cmd = mock_run.call_args[0][0]
             assert "-get-total-size" in cmd
             assert "-n" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_get_total_size_uint64_error_sentinel(self, backend):
+        """es.exe prints unsigned -1 (16384 PB!) when the size is unavailable."""
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ("18446744073709551615\n", "", 0)
+            assert await backend.get_total_size("ext:py") == -1
 
     @pytest.mark.asyncio
     async def test_get_total_size_multi_term_query_split_into_args(self, backend):

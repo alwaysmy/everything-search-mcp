@@ -1,11 +1,22 @@
 name: Release
 
-# Publishes to PyPI when a GitHub release is published.
-# One-time setup: on PyPI, add a "trusted publisher" for this repo
-# (project: everything-mcp, workflow: release.yml, environment: pypi).
+# Full release pipeline, triggered by pushing a version tag:
+#
+#   git tag v1.0.5 && git push origin v1.0.5
+#
+# 1. build          - sdist + wheel
+# 2. github-release - creates the GitHub release with generated notes
+# 3. publish-pypi   - uploads to PyPI via trusted publishing.
+#                     One-time setup: on PyPI, add a trusted publisher for
+#                     everything-mcp (workflow: release.yml, environment: pypi).
+# 4. publish-mcp-registry - publishes server.json to the official MCP
+#                     registry (GitHub OIDC, no secrets). Runs after PyPI
+#                     because the registry validates the mcp-name marker in
+#                     the published package README. Re-run this job if PyPI
+#                     propagation is slow.
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
 
 jobs:
   build:
@@ -24,7 +35,22 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  publish-pypi:
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
@@ -37,3 +63,24 @@ jobs:
           path: dist/
       - name: Publish to PyPI (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-mcp-registry:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+          mv server.tmp server.json
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish

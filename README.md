@@ -534,3 +534,5 @@ MIT - see [LICENSE](LICENSE)
 - [voidtools](https://www.voidtools.com/) for the incredible Everything search engine
 - [Anthropic](https://anthropic.com/) for the Model Context Protocol specification
 - The MCP community for driving adoption across AI tools
+
+<!-- mcp-name: io.github.elis132/everything-mcp -->

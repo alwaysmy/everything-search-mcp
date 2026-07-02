@@ -15,7 +15,9 @@ All notable changes to **everything-mcp** will be documented in this file.
 - Claude Code plugin marketplace support: `/plugin marketplace add elis132/everything-mcp`, then `/plugin install everything-mcp@everything-mcp`.
 - Bundled `everything-search` skill for Claude Code: query syntax reference, tool selection guidance, and common pitfalls.
 - CI workflow (pytest on Ubuntu/Windows for Python 3.10/3.13, ruff check/format) and `.gitattributes` line-ending normalization.
-- PyPI release workflow via trusted publishing (publishes on GitHub release) and Dependabot updates for actions and pip.
+- Release pipeline triggered by version tags: builds, creates the GitHub release, publishes to PyPI (trusted publishing), and publishes to the official MCP registry (`io.github.elis132/everything-mcp`).
+- Manual live smoke test workflow that runs the backend against a real Everything instance on a Windows runner.
+- Dependabot updates for GitHub Actions and pip.
 
 ## [1.0.4] - 2026-02-04
 

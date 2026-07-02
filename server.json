@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.elis132/everything-mcp",
+  "title": "Everything File Search",
+  "description": "Lightning-fast Windows file search for AI agents via voidtools Everything's real-time NTFS index",
+  "repository": {
+    "url": "https://github.com/elis132/everything-mcp",
+    "source": "github"
+  },
+  "version": "1.0.5",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "everything-mcp",
+      "version": "1.0.5",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -72,6 +72,39 @@ class TestEverythingConfig:
             config = EverythingConfig.auto_detect()
             assert config.instance == "custom"
 
+    def test_auto_detect_env_max_results_cap(self):
+        """EVERYTHING_MAX_RESULTS_CAP overrides the default cap."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_MAX_RESULTS_CAP": "200"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.max_results_cap == 200
+
+    def test_auto_detect_env_max_results_cap_invalid_ignored(self):
+        """A non-numeric EVERYTHING_MAX_RESULTS_CAP falls back to the default."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_MAX_RESULTS_CAP": "not-a-number"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.max_results_cap == 1000
+
+    def test_auto_detect_env_max_results_cap_negative_ignored(self):
+        """A non-positive EVERYTHING_MAX_RESULTS_CAP falls back to the default."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_MAX_RESULTS_CAP": "-5"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.max_results_cap == 1000
+
     def test_auto_detect_connection_fail(self):
         """When Everything isn't running, config records the error."""
         with (

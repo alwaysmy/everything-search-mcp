@@ -2,6 +2,19 @@
 
 All notable changes to **everything-mcp** will be documented in this file.
 
+## [1.0.5] - 2026-07-02
+
+### Fixed
+
+- Multi-term AND queries (e.g. `dm:today ext:md`) now return results: the query is split into separate es.exe arguments in `search()` (#2, contributed by @Zouxd2004) and in `count()` / `get_total_size()` so `everything_count_stats` works too (#4).
+- `total_size` no longer overflows to `18446744073709551615` ("16384.0 PB"): the es.exe unsigned `-1` error sentinel is now reported as "Total size not available" (#4).
+- A wrong `EVERYTHING_INSTANCE` no longer breaks the server: the connection falls back to instance auto-detection with a warning, error messages explain when the variable is actually needed, and the README no longer suggests setting `EVERYTHING_INSTANCE=1.5a` for all 1.5 users (#5).
+
+### Added
+
+- Claude Code plugin marketplace support: `/plugin marketplace add elis132/everything-mcp`, then `/plugin install everything-mcp@everything-mcp`.
+- CI workflow (pytest on Ubuntu/Windows for Python 3.10/3.13, ruff check/format) and `.gitattributes` line-ending normalization.
+
 ## [1.0.4] - 2026-02-04
 
 ### Changed

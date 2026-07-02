@@ -83,6 +83,36 @@ class TestEverythingConfig:
             assert not config.is_valid
             assert "IPC not found" in config.errors[0]
 
+    def test_auto_detect_bad_env_instance_falls_back(self):
+        """A wrong EVERYTHING_INSTANCE falls back to auto-detection with a warning."""
+
+        def connection(es_path, instance):
+            return (True, "OK") if instance == "" else (False, "Error 8: IPC not found")
+
+        with (
+            patch.dict("os.environ", {"EVERYTHING_INSTANCE": "1.5a"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", side_effect=connection),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.is_valid
+            assert config.instance == ""
+            assert config.warnings
+            assert "EVERYTHING_INSTANCE" in config.warnings[0]
+
+    def test_auto_detect_bad_env_instance_error_hint(self):
+        """When nothing responds, the error suggests removing EVERYTHING_INSTANCE."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_INSTANCE": "1.5a"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(False, "IPC not found")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert not config.is_valid
+            assert "try removing it" in config.errors[0]
+
 
 # ── _is_everything_es ─────────────────────────────────────────────────────
 

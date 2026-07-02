@@ -96,14 +96,45 @@ class EverythingConfig:
                 logger.info("Auto-detected instance: %s", config.instance)
 
         ok, info = _test_connection(config.es_path, config.instance)
+
+        # A wrong EVERYTHING_INSTANCE is a common misconfiguration: most
+        # Everything installs (including 1.5) run on the *default* instance,
+        # where passing -instance breaks the IPC lookup.  If the explicit
+        # instance doesn't respond, fall back to auto-detection instead of
+        # failing outright.
+        if not ok and env_instance:
+            detected = _detect_instance(config.es_path)
+            retry_ok, retry_info = _test_connection(config.es_path, detected)
+            if retry_ok:
+                warning = (
+                    f"EVERYTHING_INSTANCE='{env_instance}' does not respond; "
+                    f"using the {detected or 'default'} instance instead. "
+                    "Remove EVERYTHING_INSTANCE unless you configured a named "
+                    "instance in Everything (Tools > Options > General)."
+                )
+                config.warnings.append(warning)
+                logger.warning(warning)
+                config.instance = detected
+                ok, info = retry_ok, retry_info
+
         if ok:
             config.version_info = info
             logger.info("Everything connection OK: %s", info)
         else:
+            if env_instance:
+                hint = (
+                    f"You set EVERYTHING_INSTANCE='{env_instance}' - try removing it. "
+                    "It is only needed when Everything runs under a named instance "
+                    "(Tools > Options > General), which most installs do not."
+                )
+            else:
+                hint = (
+                    "If Everything runs under a named instance, "
+                    "set EVERYTHING_INSTANCE to its name (e.g. 1.5a)."
+                )
             config.errors.append(
                 f"Cannot connect to Everything: {info}. "
-                "Ensure Everything is running (check your system tray). "
-                "If you use Everything 1.5 alpha, try EVERYTHING_INSTANCE=1.5a"
+                f"Ensure Everything is running (check your system tray). {hint}"
             )
 
         return config

@@ -295,6 +295,12 @@ Everything MCP auto-detects your setup, but you can override:
 | `EVERYTHING_ES_PATH` | Path to es.exe | `C:\Program Files\Everything\es.exe` |
 | `EVERYTHING_INSTANCE` | Everything instance name | `1.5a` |
 
+> **Note:** Only set `EVERYTHING_INSTANCE` if you explicitly configured a named
+> instance in Everything (Tools → Options → General → Instance). Most installs -
+> including most Everything 1.5 installs - run on the **default** instance and
+> must leave this unset; setting it unnecessarily breaks the connection.
+> If in doubt, leave it out - the server auto-detects the right instance.
+
 ```json
 {
   "mcpServers": {
@@ -436,7 +442,9 @@ Get count and size statistics without listing individual files.
 ### "Everything IPC window not found"
 
 1. Ensure Everything is **running** (check system tray)
-2. If using Everything 1.5 alpha, set `EVERYTHING_INSTANCE=1.5a`
+2. If you set `EVERYTHING_INSTANCE`, try **removing** it - it is only needed
+   when Everything runs under a named instance (Tools → Options → General),
+   which most installs do not
 3. Ensure you're not running Everything Lite (no IPC support)
 
 ### "No results for valid queries"

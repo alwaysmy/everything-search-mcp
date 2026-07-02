@@ -80,6 +80,17 @@ print("Matches:", len(matches))
    - Place `es.exe` in your PATH or in the Everything installation directory
 3. **Python 3.10+** or **uv**
 
+### Via Claude Code plugin marketplace (one-liner)
+
+Inside Claude Code, run:
+
+```
+/plugin marketplace add elis132/everything-mcp
+/plugin install everything-mcp@everything-mcp
+```
+
+The plugin bundles the MCP server config - no JSON editing needed (requires [uv](https://docs.astral.sh/uv/)).
+
 ### Via uv (recommended - no install needed)
 
 ```bash
@@ -124,7 +135,14 @@ Use this server definition anywhere a client asks for MCP JSON:
 <details>
 <summary>Claude Code</summary>
 
-Use the Claude Code CLI:
+Easiest - install as a plugin (bundles the MCP server automatically):
+
+```
+/plugin marketplace add elis132/everything-mcp
+/plugin install everything-mcp@everything-mcp
+```
+
+Or use the Claude Code CLI:
 
 ```bash
 claude mcp add everything -- uvx everything-mcp

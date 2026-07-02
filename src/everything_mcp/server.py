@@ -115,27 +115,29 @@ class SearchInput(BaseModel):
     max_results: int = Field(
         default=50,
         description="Maximum results to return (1-500)",
-        ge=1, le=500,
+        ge=1,
+        le=500,
     )
     sort: str = Field(
         default="date-modified-desc",
-        description=(
-            "Sort order. Options: "
-            + ", ".join(sorted(SORT_MAP.keys()))
-        ),
+        description=("Sort order. Options: " + ", ".join(sorted(SORT_MAP.keys()))),
     )
 
     @field_validator("sort")
     @classmethod
     def validate_sort(cls, v: str) -> str:
         if v not in SORT_MAP:
-            raise ValueError(f"Invalid sort option '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}")
+            raise ValueError(
+                f"Invalid sort option '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}"
+            )
         return v
 
     match_case: bool = Field(default=False, description="Case-sensitive search")
     match_whole_word: bool = Field(default=False, description="Match whole words only")
     match_regex: bool = Field(default=False, description="Treat query as regex")
-    match_path: bool = Field(default=False, description="Match against full path, not just filename")
+    match_path: bool = Field(
+        default=False, description="Match against full path, not just filename"
+    )
     offset: int = Field(default=0, description="Skip N results (pagination)", ge=0)
 
 
@@ -202,7 +204,9 @@ class SearchByTypeInput(BaseModel):
     @classmethod
     def validate_sort(cls, v: str) -> str:
         if v not in SORT_MAP:
-            raise ValueError(f"Invalid sort option '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}")
+            raise ValueError(
+                f"Invalid sort option '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}"
+            )
         return v
 
 
@@ -250,7 +254,9 @@ class FindRecentInput(BaseModel):
         default="1hour",
         description=(
             "How recent.  Options: "
-            + ", ".join(sorted(TIME_PERIODS.keys(), key=lambda k: list(TIME_PERIODS.keys()).index(k)))
+            + ", ".join(
+                sorted(TIME_PERIODS.keys(), key=lambda k: list(TIME_PERIODS.keys()).index(k))
+            )
             + ".  Or raw Everything syntax like 'last2hours'."
         ),
     )
@@ -315,7 +321,8 @@ class FileDetailsInput(BaseModel):
     preview_lines: int = Field(
         default=0,
         description="Lines of text content to preview (0 = none, max 200)",
-        ge=0, le=200,
+        ge=0,
+        le=200,
     )
 
 
@@ -367,9 +374,15 @@ def _get_file_details_sync(paths: list[str], preview_lines: int) -> str:
                 info["size_human"] = human_size(stat.st_size)
                 info["extension"] = p.suffix.lstrip(".").lower()
 
-            info["date_modified"] = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-            info["date_created"] = datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
-            info["date_accessed"] = datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M:%S")
+            info["date_modified"] = datetime.fromtimestamp(stat.st_mtime).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            info["date_created"] = datetime.fromtimestamp(stat.st_ctime).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            info["date_accessed"] = datetime.fromtimestamp(stat.st_atime).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             info["read_only"] = not os.access(filepath, os.W_OK)
 
             # Windows hidden attribute or Unix dotfile
@@ -563,8 +576,7 @@ def _format_search_results(
     if len(results) >= max_results:
         lines.append("")
         lines.append(
-            f"Showing first {max_results} results.  "
-            "Use 'offset' to paginate or refine the query."
+            f"Showing first {max_results} results.  Use 'offset' to paginate or refine the query."
         )
 
     return "\n".join(lines)
@@ -573,58 +585,213 @@ def _format_search_results(
 # ── Text file preview ─────────────────────────────────────────────────────
 
 # Extensions we can safely read as text
-_TEXT_EXTENSIONS: frozenset[str] = frozenset({
-    # Text & docs
-    "txt", "md", "mdx", "rst", "adoc", "org",
-    # Python
-    "py", "pyi", "pyw", "pyx", "pxd",
-    # JavaScript/TypeScript
-    "js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx",
-    # Web frameworks
-    "vue", "svelte", "astro", "marko",
-    # C family
-    "c", "cpp", "cc", "cxx", "h", "hpp", "hxx", "cs", "java", "m", "mm",
-    # Systems languages
-    "go", "rs", "rb", "php", "swift", "kt", "kts", "scala", "r", "lua",
-    # Shell
-    "sh", "bash", "zsh", "fish", "ps1", "psm1", "psd1", "bat", "cmd",
-    # Database & query
-    "sql", "prisma", "graphql", "gql",
-    # Web
-    "html", "htm", "css", "scss", "sass", "less", "styl", "pcss",
-    # Data formats
-    "json", "jsonc", "json5", "jsonl", "ndjson",
-    "xml", "xsl", "xslt", "xsd", "svg", "rss", "atom",
-    "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "properties",
-    "csv", "tsv", "log",
-    # Config files (with extensions)
-    "gitignore", "gitattributes", "gitmodules", "npmrc", "nvmrc", "yarnrc",
-    "dockerignore", "editorconfig", "eslintrc", "prettierrc", "babelrc",
-    "stylelintrc", "browserslistrc",
-    # Build tools
-    "makefile", "dockerfile", "cmake", "gradle", "sbt", "cabal", "bazel",
-    # Academic
-    "tex", "bib", "cls", "sty",
-    # Hardware
-    "asm", "s", "v", "sv", "vhd", "vhdl",
-    # Modern languages
-    "dart", "zig", "nim", "hx", "odin", "jai", "vlang",
-    # Functional
-    "ex", "exs", "erl", "hrl", "hs", "lhs", "ml", "mli", "fs", "fsi", "fsx",
-    "clj", "cljs", "cljc", "edn", "lisp", "el", "rkt", "scm", "fnl",
-    # Other
-    "pro", "pri", "qml", "proto", "thrift", "capnp",
-    "tf", "hcl", "nix", "dhall", "jsonnet", "cue",
-    "http", "rest", "lock",
-})
+_TEXT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        # Text & docs
+        "txt",
+        "md",
+        "mdx",
+        "rst",
+        "adoc",
+        "org",
+        # Python
+        "py",
+        "pyi",
+        "pyw",
+        "pyx",
+        "pxd",
+        # JavaScript/TypeScript
+        "js",
+        "mjs",
+        "cjs",
+        "ts",
+        "mts",
+        "cts",
+        "jsx",
+        "tsx",
+        # Web frameworks
+        "vue",
+        "svelte",
+        "astro",
+        "marko",
+        # C family
+        "c",
+        "cpp",
+        "cc",
+        "cxx",
+        "h",
+        "hpp",
+        "hxx",
+        "cs",
+        "java",
+        "m",
+        "mm",
+        # Systems languages
+        "go",
+        "rs",
+        "rb",
+        "php",
+        "swift",
+        "kt",
+        "kts",
+        "scala",
+        "r",
+        "lua",
+        # Shell
+        "sh",
+        "bash",
+        "zsh",
+        "fish",
+        "ps1",
+        "psm1",
+        "psd1",
+        "bat",
+        "cmd",
+        # Database & query
+        "sql",
+        "prisma",
+        "graphql",
+        "gql",
+        # Web
+        "html",
+        "htm",
+        "css",
+        "scss",
+        "sass",
+        "less",
+        "styl",
+        "pcss",
+        # Data formats
+        "json",
+        "jsonc",
+        "json5",
+        "jsonl",
+        "ndjson",
+        "xml",
+        "xsl",
+        "xslt",
+        "xsd",
+        "svg",
+        "rss",
+        "atom",
+        "yaml",
+        "yml",
+        "toml",
+        "ini",
+        "cfg",
+        "conf",
+        "env",
+        "properties",
+        "csv",
+        "tsv",
+        "log",
+        # Config files (with extensions)
+        "gitignore",
+        "gitattributes",
+        "gitmodules",
+        "npmrc",
+        "nvmrc",
+        "yarnrc",
+        "dockerignore",
+        "editorconfig",
+        "eslintrc",
+        "prettierrc",
+        "babelrc",
+        "stylelintrc",
+        "browserslistrc",
+        # Build tools
+        "makefile",
+        "dockerfile",
+        "cmake",
+        "gradle",
+        "sbt",
+        "cabal",
+        "bazel",
+        # Academic
+        "tex",
+        "bib",
+        "cls",
+        "sty",
+        # Hardware
+        "asm",
+        "s",
+        "v",
+        "sv",
+        "vhd",
+        "vhdl",
+        # Modern languages
+        "dart",
+        "zig",
+        "nim",
+        "hx",
+        "odin",
+        "jai",
+        "vlang",
+        # Functional
+        "ex",
+        "exs",
+        "erl",
+        "hrl",
+        "hs",
+        "lhs",
+        "ml",
+        "mli",
+        "fs",
+        "fsi",
+        "fsx",
+        "clj",
+        "cljs",
+        "cljc",
+        "edn",
+        "lisp",
+        "el",
+        "rkt",
+        "scm",
+        "fnl",
+        # Other
+        "pro",
+        "pri",
+        "qml",
+        "proto",
+        "thrift",
+        "capnp",
+        "tf",
+        "hcl",
+        "nix",
+        "dhall",
+        "jsonnet",
+        "cue",
+        "http",
+        "rest",
+        "lock",
+    }
+)
 
 # Filenames (no extension) that are always text
-_TEXT_FILENAMES: frozenset[str] = frozenset({
-    "makefile", "dockerfile", "cmakelists.txt", "rakefile", "gemfile",
-    "procfile", "vagrantfile", "brewfile", "justfile", "taskfile",
-    "license", "licence", "readme", "authors", "contributors",
-    "changelog", "changes", "history", "news", "todo",
-})
+_TEXT_FILENAMES: frozenset[str] = frozenset(
+    {
+        "makefile",
+        "dockerfile",
+        "cmakelists.txt",
+        "rakefile",
+        "gemfile",
+        "procfile",
+        "vagrantfile",
+        "brewfile",
+        "justfile",
+        "taskfile",
+        "license",
+        "licence",
+        "readme",
+        "authors",
+        "contributors",
+        "changelog",
+        "changes",
+        "history",
+        "news",
+        "todo",
+    }
+)
 
 _MAX_DIR_SCAN_ITEMS = 10_000
 _MAX_SUBDIRECTORY_SAMPLE = 20

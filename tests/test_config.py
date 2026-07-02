@@ -103,6 +103,7 @@ class TestIsEverythingEs:
 
     def test_timeout(self):
         import subprocess
+
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="es", timeout=5)):
             # Should try fallback and also fail
             assert _is_everything_es(r"C:\slow.exe") is False
@@ -159,6 +160,7 @@ class TestTestConnection:
 
     def test_connection_timeout(self):
         import subprocess
+
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="es", timeout=10)):
             ok, info = _test_connection(r"C:\es.exe", "")
             assert ok is False

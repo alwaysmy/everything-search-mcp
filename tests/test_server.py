@@ -165,6 +165,7 @@ class TestSortValidation:
 
     def test_valid_sort_accepted(self):
         from everything_mcp.server import SearchInput
+
         params = SearchInput(query="*.py", sort="date-modified-desc")
         assert params.sort == "date-modified-desc"
 
@@ -172,12 +173,14 @@ class TestSortValidation:
         from pydantic import ValidationError
 
         from everything_mcp.server import SearchInput
+
         with pytest.raises(ValidationError, match="Invalid sort option"):
             SearchInput(query="*.py", sort="invalid-sort")
 
     def test_all_sort_options_valid(self):
         from everything_mcp.backend import SORT_MAP
         from everything_mcp.server import SearchInput
+
         for sort_key in SORT_MAP:
             params = SearchInput(query="test", sort=sort_key)
             assert params.sort == sort_key
@@ -257,6 +260,7 @@ class TestToolErrorHandling:
             server._config = None
 
             from everything_mcp.server import SearchInput, everything_search
+
             params = SearchInput(query="*.py")
             result = await everything_search(params)
             assert isinstance(result, str)
@@ -276,6 +280,7 @@ class TestToolErrorHandling:
             server._config = None
 
             from everything_mcp.server import CountStatsInput, everything_count_stats
+
             params = CountStatsInput(query="*.py")
             result = await everything_count_stats(params)
             assert isinstance(result, str)

@@ -146,7 +146,9 @@ def _is_everything_es(path: str) -> bool:
     try:
         result = subprocess.run(
             [path, "-get-everything-version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
             creationflags=_CREATE_NO_WINDOW,
         )
         output = result.stdout.strip()
@@ -157,7 +159,9 @@ def _is_everything_es(path: str) -> bool:
     try:
         result = subprocess.run(
             [path, "-version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
             creationflags=_CREATE_NO_WINDOW,
         )
         return "everything" in result.stdout.lower()
@@ -196,7 +200,9 @@ def _detect_instance(es_path: str) -> str:
     try:
         result = subprocess.run(
             [es_path, "-get-everything-version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
             creationflags=_CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -207,7 +213,9 @@ def _detect_instance(es_path: str) -> str:
     try:
         result = subprocess.run(
             [es_path, "-instance", "1.5a", "-get-everything-version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
             creationflags=_CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -227,7 +235,9 @@ def _test_connection(es_path: str, instance: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             [*base, "-get-everything-version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
             creationflags=_CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -238,7 +248,9 @@ def _test_connection(es_path: str, instance: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             [*base, "-n", "1", "*.txt"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
             creationflags=_CREATE_NO_WINDOW,
         )
         if result.returncode == 0:

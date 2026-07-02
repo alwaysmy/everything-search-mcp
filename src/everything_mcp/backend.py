@@ -311,8 +311,7 @@ class EverythingBackend:
             ) from exc
         except FileNotFoundError as exc:
             raise RuntimeError(
-                f"es.exe not found at: {self.config.es_path}. "
-                "Verify Everything is installed."
+                f"es.exe not found at: {self.config.es_path}. Verify Everything is installed."
             ) from exc
 
 
@@ -432,7 +431,7 @@ def _split_query_terms(query: str) -> list[str]:
         token = query[start:i]
         # Strip quotes: es.exe receives argv literally, quotes are
         # shell-only. path:"C:\My Path" → path:C:\My Path
-        token = token.replace('"', '')
+        token = token.replace('"', "")
         if token:
             tokens.append(token)
     return tokens

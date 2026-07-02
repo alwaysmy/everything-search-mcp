@@ -344,8 +344,12 @@ class TestEverythingBackend:
             mock_run.return_value = ("", "", 0)
             with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search(
-                    "test", match_case=True, match_whole_word=True,
-                    match_regex=True, match_path=True, offset=50,
+                    "test",
+                    match_case=True,
+                    match_whole_word=True,
+                    match_regex=True,
+                    match_path=True,
+                    offset=50,
                 )
             cmd = mock_run.call_args[0][0]
             assert "-case" in cmd

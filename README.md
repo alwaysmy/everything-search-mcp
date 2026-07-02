@@ -1,48 +1,50 @@
-﻿<div align="center">
+<div align="center">
   <h1>⚡ Everything MCP</h1>
   <p>
-    <strong>The definitive MCP server for <a href="https://www.voidtools.com/">voidtools Everything</a> - lightning-fast file search for AI agents.</strong>
+    <strong>MCP server for <a href="https://www.voidtools.com/">voidtools Everything</a> - search millions of Windows files in milliseconds from any AI agent.</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/everything-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
     <a href="https://pypi.org/project/everything-mcp/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
     <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/elis132/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
   </p>
-  <p>Search millions of files in milliseconds. Built for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Gemini</strong>, <strong>Kimi</strong>, <strong>Qwen</strong>, <strong>Cursor</strong>, <strong>Windsurf</strong>, and any MCP-compatible client.</p>
 </div>
 
 ---
 
-## Why This One?
+## Quick start
 
-| Feature | everything-mcp (this) | mamertofabian (271⭐) | essovius (0⭐) |
-|---|---|---|---|
-| **Tools** | 5 well-designed | 1 generic | 16 granular |
-| **Auto-detection** | ✅ Finds Everything + es.exe automatically | ❌ Manual DLL path | ❌ Manual setup |
-| **Everything 1.5** | ✅ Auto-detects instance | ❌ No support | ⚠️ Manual flag |
-| **Content preview** | ✅ Read first N lines | ❌ | ❌ |
-| **File type categories** | ✅ 10 categories | ❌ | ✅ |
-| **Stats & counts** | ✅ Size stats, extension breakdown | ❌ | Partial |
-| **Error handling** | ✅ All tools return clean errors | ❌ Raw exceptions | ❌ |
-| **Test suite** | ✅ pytest | ❌ | ❌ |
-| **Zero config** | ✅ Works out of the box | ❌ Need SDK DLL path | ❌ Need es.exe in PATH |
+```
+/plugin marketplace add elis132/everything-mcp
+/plugin install everything-mcp@everything-mcp
+```
+
+That's it for Claude Code - the plugin bundles the MCP server and a skill that teaches the query syntax. For every other client, see [Installation](#installation) below.
+
+## Why this one
+
+|  | **everything-mcp** (this) | [mamertofabian](https://github.com/mamertofabian/mcp-everything-search) (342⭐) | [Josephur](https://github.com/Josephur/everything-mcp) (26⭐) | essovius |
+|---|---|---|---|---|
+| Tools | 5 | 1 | 1 | 16 |
+| Setup | Auto-detects es.exe | Manual SDK DLL path | Manual HTTP server + host/port | Manual es.exe in PATH |
+| Everything 1.5 | Auto-detects instance | Not supported | Untested | Manual flag |
+| Talks to Everything via | `es.exe` subprocess | Everything SDK (DLL) | Everything's HTTP server plugin (unauthenticated) | `es.exe` subprocess |
+| Tests / CI | pytest, GitHub Actions | None visible | None visible | None visible |
 
 ## Performance
 
-Real benchmark from this machine (Windows, query: `everything.exe`):
+`es.exe` (Everything's real-time NTFS index) vs. a naive filesystem walk, same query:
 
-- `everything-mcp` (Everything index via `es.exe`): **220.22 ms avg** (5 runs)
-- Naive filesystem walk over `C:\`: **66,539.03 ms** (single run)
-- Observed speedup: **~302x faster**
+- **everything-mcp**: 220 ms avg (5 runs)
+- **Naive walk of `C:\`**: 66,539 ms
+- **~300x faster**
 
-Reproduce locally (PowerShell):
+<details>
+<summary>Reproduce this benchmark</summary>
 
 ```powershell
 @'
-import os
-import subprocess
-import time
-import statistics
+import os, subprocess, time, statistics
 
 ES = os.path.expandvars(r"%LOCALAPPDATA%\Everything\es.exe")
 QUERY = "everything.exe"
@@ -68,59 +70,39 @@ print("Speedup x:", round(walk_ms / es_avg, 1))
 print("Matches:", len(matches))
 '@ | python -
 ```
+</details>
+
+---
 
 ## Installation
 
 ### Prerequisites
 
 1. **Windows** with [Everything](https://www.voidtools.com/) installed and **running**
-2. **es.exe** (Everything command-line interface):
-   - **Everything 1.5 alpha**: es.exe is included
-   - **Everything 1.4**: Download from [github.com/voidtools/es](https://github.com/voidtools/es/releases), or install via a package manager: `winget install voidtools.Everything.Cli`, `scoop install everything-cli`, or `choco install es`
-   - Place `es.exe` in your PATH or in the Everything installation directory - auto-detection already checks the standard winget, Scoop, and Chocolatey install locations
+2. **es.exe** (Everything's command-line interface) - included with Everything 1.5 alpha, or install separately:
+   - `winget install voidtools.Everything.Cli`
+   - `scoop install everything-cli`
+   - `choco install es`
+   - or download from [github.com/voidtools/es](https://github.com/voidtools/es/releases) and place it in your PATH
 3. **Python 3.10+** or **uv**
 
-### Via Claude Code plugin marketplace (one-liner)
-
-Inside Claude Code, run:
-
-```
-/plugin marketplace add elis132/everything-mcp
-/plugin install everything-mcp@everything-mcp
-```
-
-The plugin bundles the MCP server config - no JSON editing needed (requires [uv](https://docs.astral.sh/uv/)).
-It also ships an `everything-search` skill that teaches Claude the Everything
-query syntax and when to reach for these tools instead of slow directory walks.
-
-### Via uv (recommended - no install needed)
+### Run the server
 
 ```bash
-uvx everything-mcp
+uvx everything-mcp          # recommended, no install needed
+pip install everything-mcp  # or via pip
 ```
 
-### Via pip
-
-```bash
-pip install everything-mcp
-```
-
-### From source
+From source:
 
 ```bash
 git clone https://github.com/elis132/everything-mcp.git
-cd everything-mcp
-pip install -e ".[dev]"
+cd everything-mcp && pip install -e ".[dev]"
 ```
 
----
+### Add it to your client
 
-## Configuration
-
-<details>
-<summary>Shared MCP JSON Template</summary>
-
-Use this server definition anywhere a client asks for MCP JSON:
+Every client below uses the same MCP server definition:
 
 ```json
 {
@@ -132,177 +114,43 @@ Use this server definition anywhere a client asks for MCP JSON:
   }
 }
 ```
-</details>
+
+| Client | How to add it |
+|---|---|
+| **Claude Code** | `/plugin install everything-mcp@everything-mcp` (see [Quick start](#quick-start)), or `claude mcp add everything -- uvx everything-mcp` |
+| **Claude Desktop** | Paste the JSON above into `%APPDATA%\Claude\claude_desktop_config.json` |
+| **Codex CLI** | `codex mcp add everything -- uvx everything-mcp` |
+| **Gemini CLI** | `gemini mcp add -s user everything uvx everything-mcp` |
+| **Kimi CLI** | `kimi mcp add --transport stdio everything -- uvx everything-mcp` |
+| **Qwen CLI** | `qwen mcp add -s user everything uvx everything-mcp` |
+| **Cursor** | Paste the JSON above into Cursor's MCP settings UI |
+| **Windsurf** | Paste the JSON above into `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
+| **Any other MCP client** | Use the JSON above verbatim |
 
 <details>
-<summary>Claude Code</summary>
-
-Easiest - install as a plugin (bundles the MCP server plus an
-`everything-search` skill that teaches Claude the query syntax):
-
-```
-/plugin marketplace add elis132/everything-mcp
-/plugin install everything-mcp@everything-mcp
-```
-
-Or use the Claude Code CLI:
-
-```bash
-claude mcp add everything -- uvx everything-mcp
-claude mcp list
-```
-
-Or add to `.claude/settings.json`:
+<summary>Using pip instead of uvx</summary>
 
 ```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "uvx",
-      "args": ["everything-mcp"]
-    }
-  }
-}
-```
-</details>
-
-<details>
-<summary>Claude Desktop</summary>
-
-Add to `%APPDATA%\Claude\claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "uvx",
-      "args": ["everything-mcp"]
-    }
-  }
-}
-```
-</details>
-
-<details>
-<summary>Codex CLI</summary>
-
-Use the Codex CLI:
-
-```bash
-codex mcp add everything -- uvx everything-mcp
-codex mcp list
-```
-</details>
-
-<details>
-<summary>Gemini CLI</summary>
-
-Use the Gemini CLI:
-
-```bash
-gemini mcp add -s user everything uvx everything-mcp
-gemini mcp list
-```
-</details>
-
-<details>
-<summary>Kimi CLI</summary>
-
-Use the Kimi CLI:
-
-```bash
-kimi mcp add --transport stdio everything -- uvx everything-mcp
-kimi mcp list
-```
-</details>
-
-<details>
-<summary>Qwen CLI</summary>
-
-Use the Qwen CLI:
-
-```bash
-qwen mcp add -s user everything uvx everything-mcp
-qwen mcp list
-```
-</details>
-
-<details>
-<summary>Cursor</summary>
-
-Cursor currently uses MCP settings/deeplinks rather than a stable `mcp add`
-CLI command. Add the JSON config in Cursor's MCP settings UI.
-</details>
-
-<details>
-<summary>Windsurf</summary>
-
-Windsurf currently uses MCP settings rather than a stable `mcp add` CLI
-command. On Windows, add the JSON config to:
-
-`%USERPROFILE%\.codeium\windsurf\mcp_config.json`
-</details>
-
-<details>
-<summary>Generic MCP Clients</summary>
-
-Any MCP-compatible client can use this format:
-
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "uvx",
-      "args": ["everything-mcp"]
-    }
-  }
-}
-```
-</details>
-
-<details>
-<summary>Using pip Instead of uvx</summary>
-
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "everything-mcp"
-    }
-  }
-}
+{ "mcpServers": { "everything": { "command": "everything-mcp" } } }
 ```
 
-Or with explicit Python:
-
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "python",
-      "args": ["-m", "everything_mcp"]
-    }
-  }
-}
-```
+Or with explicit Python: `{"command": "python", "args": ["-m", "everything_mcp"]}`
 </details>
 
----
-
-## Environment Variables (Optional)
+### Environment variables (optional)
 
 Everything MCP auto-detects your setup, but you can override:
 
 | Variable | Description | Example |
 |---|---|---|
 | `EVERYTHING_ES_PATH` | Path to es.exe | `C:\Program Files\Everything\es.exe` |
-| `EVERYTHING_INSTANCE` | Everything instance name | `1.5a` |
+| `EVERYTHING_INSTANCE` | Named Everything instance | `1.5a` |
+| `EVERYTHING_MAX_RESULTS_CAP` | Hard cap on results per search (default `1000`) | `200` |
 
-> **Note:** Only set `EVERYTHING_INSTANCE` if you explicitly configured a named
-> instance in Everything (Tools → Options → General → Instance). Most installs -
-> including most Everything 1.5 installs - run on the **default** instance and
-> must leave this unset; setting it unnecessarily breaks the connection.
-> If in doubt, leave it out - the server auto-detects the right instance.
+> Only set `EVERYTHING_INSTANCE` if you explicitly configured a named instance
+> in Everything (Tools → Options → General → Instance). Most installs -
+> including most Everything 1.5 installs - run on the **default** instance;
+> setting this unnecessarily breaks the connection. If in doubt, leave it out.
 
 ```json
 {
@@ -310,9 +158,7 @@ Everything MCP auto-detects your setup, but you can override:
     "everything": {
       "command": "uvx",
       "args": ["everything-mcp"],
-      "env": {
-        "EVERYTHING_INSTANCE": "1.5a"
-      }
+      "env": { "EVERYTHING_INSTANCE": "1.5a" }
     }
   }
 }
@@ -322,182 +168,86 @@ Everything MCP auto-detects your setup, but you can override:
 
 ## Tools
 
-### 1. `everything_search` - The Workhorse
-
-Search files and folders using Everything's full query syntax.
+### 1. `everything_search` - the workhorse
 
 | Parameter | Default | Description |
 |---|---|---|
 | `query` | *(required)* | Everything search query |
-| `max_results` | 50 | 1–500 |
-| `sort` | `date-modified-desc` | See sort options below |
-| `match_case` | false | Case-sensitive |
-| `match_whole_word` | false | Whole words only |
-| `match_regex` | false | Regex mode |
-| `match_path` | false | Match full path |
+| `max_results` | 50 | 1-500 |
+| `sort` | `date-modified-desc` | name, path, size, date-modified, date-created, extension (+ `-desc` variants) |
+| `match_case` / `match_whole_word` / `match_regex` / `match_path` | false | Match modifiers |
 | `offset` | 0 | Pagination offset |
 
-**Everything Search Syntax:**
+**Query syntax:**
 
 ```
-*.py                          → All Python files
-ext:py;js;ts                  → Multiple extensions
-ext:py path:C:\Projects       → Python files in Projects
-size:>10mb                    → Larger than 10 MB
-size:1kb..1mb                 → Between 1 KB and 1 MB
-dm:today                      → Modified today
-dm:last1week                  → Modified in the last week
-dc:2024                       → Created in 2024
-"exact name.txt"              → Exact filename match
-project1 | project2           → OR search
-!node_modules                 → Exclude term
-ext:py !test !__pycache__     → Python, excluding tests
-content:TODO                  → Files containing TODO (requires content indexing)
-regex:^test_.*\.py$           → Regex search
-parent:src ext:py             → Python files in 'src' folders
-dupe:                         → Duplicate filenames
-empty:                        → Empty folders
+*.py                          all Python files
+ext:py;js;ts                  multiple extensions
+ext:py path:C:\Projects       Python files under a path
+size:>10mb                    larger than 10 MB
+size:1kb..1mb                 between 1 KB and 1 MB
+dm:today / dm:last1week       modified today / in the last week
+dc:2024                       created in 2024
+"exact name.txt"              exact filename match
+project1 | project2           OR search
+!node_modules                 exclude a term
+content:TODO                  files containing TODO (needs content indexing)
+regex:^test_.*\.py$           regex search
+parent:src ext:py             files directly inside 'src' folders
+dupe:  /  empty:               duplicate filenames / empty folders
 ```
 
-### 2. `everything_search_by_type` - Category Search
+### 2. `everything_search_by_type` - category search
 
-Search by pre-defined file type categories.
+Categories: `audio`, `video`, `image`, `document`, `code`, `archive`, `executable`, `font`, `3d`, `data`
 
-**Categories:** `audio`, `video`, `image`, `document`, `code`, `archive`, `executable`, `font`, `3d`, `data`
+Parameters: `file_type` *(required)*, `query`, `path`, `max_results`, `sort`
 
-| Parameter | Default | Description |
-|---|---|---|
-| `file_type` | *(required)* | Category name |
-| `query` | `""` | Additional filter |
-| `path` | `""` | Directory restriction |
-| `max_results` | 50 | 1–500 |
-| `sort` | `date-modified-desc` | Sort order |
+### 3. `everything_find_recent` - what changed?
 
-### 3. `everything_find_recent` - What Changed?
+Periods: `1min` … `12hours`, `today`, `yesterday`, `1day` … `1year`
 
-Find recently modified files. Sorted newest-first.
+Parameters: `period` (default `1hour`), `path`, `extensions`, `query`, `max_results`
 
-**Periods:** `1min`, `5min`, `10min`, `15min`, `30min`, `1hour`, `2hours`, `6hours`, `12hours`, `today`, `yesterday`, `1day`, `3days`, `1week`, `2weeks`, `1month`, `3months`, `6months`, `1year`
+### 4. `everything_file_details` - deep inspection
 
-| Parameter | Default | Description |
-|---|---|---|
-| `period` | `1hour` | Time period |
-| `path` | `""` | Directory restriction |
-| `extensions` | `""` | Extension filter (e.g. `py,js,ts`) |
-| `query` | `""` | Additional filter |
-| `max_results` | 50 | 1–500 |
+Parameters: `paths` *(required, 1-20)*, `preview_lines` (0-200)
 
-### 4. `everything_file_details` - Deep Inspection
+Returns full metadata; for directories, item count and listing; for text files with a preview, the first N lines.
 
-Get metadata and optional content preview for specific files.
+### 5. `everything_count_stats` - quick analytics
 
-| Parameter | Default | Description |
-|---|---|---|
-| `paths` | *(required)* | File paths to inspect (1–20) |
-| `preview_lines` | 0 | Lines of text to preview (0–200) |
+Parameters: `query` *(required)*, `include_size` (default true), `breakdown_by_extension`
 
-**Returns:** Full metadata (size, dates, permissions, hidden status). Directories: item count and listing. Text files with preview: first N lines of content.
-
-### 5. `everything_count_stats` - Quick Analytics
-
-Get count and size statistics without listing individual files.
-
-| Parameter | Default | Description |
-|---|---|---|
-| `query` | *(required)* | Search query |
-| `include_size` | true | Calculate total size |
-| `breakdown_by_extension` | false | Sampled per-extension stats (files only) |
+Count and size stats without listing every file - check scope before a big search.
 
 ---
 
 ## Examples
 
-> "Find all Python files modified today in my project"
-
-→ `everything_find_recent(period="today", extensions="py", path="C:\Projects\myapp")`
-
-> "How much disk space do my log files use?"
-
-→ `everything_count_stats(query="ext:log", include_size=true, breakdown_by_extension=true)`
-
-> "Show me the first 50 lines of that config file"
-
-→ `everything_file_details(paths=["C:\Projects\app\config.yaml"], preview_lines=50)`
-
-> "Find all duplicate filenames in Documents"
-
-→ `everything_search(query='dupe: path:"C:\Users\me\Documents"')`
-
-> "Find all images larger than 5MB"
-
-→ `everything_search(query="ext:jpg;png;gif size:>5mb")`
+| Ask | Call |
+|---|---|
+| Python files modified today in my project | `everything_find_recent(period="today", extensions="py", path="C:\Projects\myapp")` |
+| How much space do my log files use? | `everything_count_stats(query="ext:log", include_size=true, breakdown_by_extension=true)` |
+| First 50 lines of a config file | `everything_file_details(paths=["C:\Projects\app\config.yaml"], preview_lines=50)` |
+| Duplicate filenames in Documents | `everything_search(query='dupe: path:"C:\Users\me\Documents"')` |
+| Images larger than 5MB | `everything_search(query="ext:jpg;png;gif size:>5mb")` |
 
 ---
 
 ## Troubleshooting
 
-### "es.exe not found"
+**"es.exe not found"** - Install [Everything](https://www.voidtools.com/) and [es.exe](https://github.com/voidtools/es/releases), or set `EVERYTHING_ES_PATH`.
 
-1. Ensure Everything is installed: https://www.voidtools.com/
-2. Download es.exe: https://github.com/voidtools/es/releases
-3. Place es.exe in your PATH or set `EVERYTHING_ES_PATH`
+**"Everything IPC window not found"** - Make sure Everything is running (check the system tray). If you set `EVERYTHING_INSTANCE`, try removing it - most installs don't need it. Everything Lite doesn't support IPC.
 
-### "Everything IPC window not found"
+**No results for valid queries** - Confirm Everything's index has finished building, try the same query in Everything's GUI, and check the drive/path is included in Everything's index settings.
 
-1. Ensure Everything is **running** (check system tray)
-2. If you set `EVERYTHING_INSTANCE`, try **removing** it - it is only needed
-   when Everything runs under a named instance (Tools → Options → General),
-   which most installs do not
-3. Ensure you're not running Everything Lite (no IPC support)
-
-### "No results for valid queries"
-
-1. Verify Everything's index is built (needs time on first run)
-2. Try the same query in Everything's GUI
-3. Check that the drive/path is included in Everything's index settings
-
-### Debugging
+**Debugging:**
 
 ```bash
-# View server logs
-everything-mcp 2>everything-mcp.log
-
-# MCP Inspector
-npx @modelcontextprotocol/inspector uvx everything-mcp
-```
-
----
-
-## Architecture
-
-```
-┌──────────────┐     MCP (stdio)     ┌──────────────────┐
-│  AI Agent    │◄────────────────────►│  Everything MCP  │
-│ (Claude,     │                      │  Server          │
-│  Codex, etc) │                      │                  │
-└──────────────┘                      │  5 Tools:        │
-                                      │  • search        │
-                                      │  • search_by_type│
-                                      │  • find_recent   │
-                                      │  • file_details  │
-                                      │  • count_stats   │
-                                      └────────┬─────────┘
-                                               │ async subprocess
-                                               ▼
-                                      ┌──────────────────┐
-                                      │     es.exe       │
-                                      │  (CLI interface)  │
-                                      └────────┬─────────┘
-                                               │ IPC / Named Pipes
-                                               ▼
-                                      ┌──────────────────┐
-                                      │   Everything     │
-                                      │   Service        │
-                                      │  (voidtools)     │
-                                      │                  │
-                                      │  Real-time NTFS  │
-                                      │  file index      │
-                                      └──────────────────┘
+everything-mcp 2>everything-mcp.log                        # server logs
+npx @modelcontextprotocol/inspector uvx everything-mcp      # MCP Inspector
 ```
 
 ---
@@ -505,25 +255,12 @@ npx @modelcontextprotocol/inspector uvx everything-mcp
 ## Development
 
 ```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Lint
-ruff check src/ tests/
+pip install -e ".[dev]"   # install with dev dependencies
+pytest                    # run tests
+ruff check src/ tests/    # lint
 ```
 
-## Contributing
-
-Contributions welcome! Areas for improvement:
-
-- Direct named pipe IPC (bypass es.exe for lower latency)
-- Everything SDK3 integration for Everything 1.5
-- Content search integration
-- File watching / change notifications
-- Bookmark and tag support (Everything 1.5)
+Contributions welcome - see [CLAUDE.md](CLAUDE.md) for the architecture and design decisions. Areas of interest: direct named-pipe IPC, Everything SDK3 for 1.5, content search, file-watching, bookmark/tag support.
 
 ## License
 
@@ -531,8 +268,6 @@ MIT - see [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-- [voidtools](https://www.voidtools.com/) for the incredible Everything search engine
-- [Anthropic](https://anthropic.com/) for the Model Context Protocol specification
-- The MCP community for driving adoption across AI tools
+[voidtools](https://www.voidtools.com/) for Everything, [Anthropic](https://anthropic.com/) for the Model Context Protocol, and the MCP community.
 
 <!-- mcp-name: io.github.elis132/everything-mcp -->

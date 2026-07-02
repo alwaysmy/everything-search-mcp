@@ -76,8 +76,8 @@ print("Matches:", len(matches))
 1. **Windows** with [Everything](https://www.voidtools.com/) installed and **running**
 2. **es.exe** (Everything command-line interface):
    - **Everything 1.5 alpha**: es.exe is included
-   - **Everything 1.4**: Download from [github.com/voidtools/es](https://github.com/voidtools/es/releases)
-   - Place `es.exe` in your PATH or in the Everything installation directory
+   - **Everything 1.4**: Download from [github.com/voidtools/es](https://github.com/voidtools/es/releases), or install via a package manager: `winget install voidtools.Everything.Cli`, `scoop install es`, or `choco install es`
+   - Place `es.exe` in your PATH or in the Everything installation directory - auto-detection already checks the standard winget, Scoop, and Chocolatey install locations
 3. **Python 3.10+** or **uv**
 
 ### Via Claude Code plugin marketplace (one-liner)

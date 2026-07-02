@@ -68,11 +68,31 @@ class EverythingConfig:
           4. Windows Registry
           5. Instance auto-detection (default → 1.5a)
           6. Connectivity test
+
+        ``EVERYTHING_MAX_RESULTS_CAP`` optionally lowers the hard cap on
+        results per search (default 1000), useful for limiting token usage.
         """
         config = cls()
 
         env_path = os.environ.get("EVERYTHING_ES_PATH", "").strip()
         env_instance = os.environ.get("EVERYTHING_INSTANCE", "").strip()
+        env_max_results_cap = os.environ.get("EVERYTHING_MAX_RESULTS_CAP", "").strip()
+
+        if env_max_results_cap:
+            try:
+                cap = int(env_max_results_cap)
+                if cap > 0:
+                    config.max_results_cap = cap
+                else:
+                    logger.warning(
+                        "EVERYTHING_MAX_RESULTS_CAP='%s' must be positive, ignoring",
+                        env_max_results_cap,
+                    )
+            except ValueError:
+                logger.warning(
+                    "EVERYTHING_MAX_RESULTS_CAP='%s' is not a valid integer, ignoring",
+                    env_max_results_cap,
+                )
 
         if env_instance:
             config.instance = env_instance

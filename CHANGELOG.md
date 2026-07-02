@@ -2,6 +2,16 @@
 
 All notable changes to **everything-mcp** will be documented in this file.
 
+## [1.0.6] - 2026-07-02
+
+### Added
+
+- `EVERYTHING_MAX_RESULTS_CAP` environment variable to lower the hard cap on results per search (default `1000`), for token-budget control.
+
+### Changed
+
+- README simplified from 539 to ~273 lines: collapsed duplicate per-client MCP config blocks into one shared block plus a table, moved the benchmark script into a collapsed section, dropped the redundant architecture diagram, and refreshed the competitor comparison table.
+
 ## [1.0.5] - 2026-07-02
 
 ### Fixed

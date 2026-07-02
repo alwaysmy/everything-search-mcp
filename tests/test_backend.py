@@ -15,6 +15,7 @@ from everything_mcp.backend import (
     _decode_output,
     _looks_like_path,
     _parse_paths_and_stat,
+    _split_query_terms,
     build_recent_query,
     build_type_query,
     human_size,
@@ -221,6 +222,53 @@ class TestBuildRecentQuery:
             assert f"dm:{value}" in q
 
 
+# ── _split_query_terms ────────────────────────────────────────────────────
+
+
+class TestSplitQueryTerms:
+    def test_single_term(self):
+        assert _split_query_terms("*.py") == ["*.py"]
+
+    def test_multi_term_and(self):
+        assert _split_query_terms("dm:today ext:md") == ["dm:today", "ext:md"]
+
+    def test_quoted_phrase_kept_together(self):
+        assert _split_query_terms('"exact name.txt"') == ["exact name.txt"]
+
+    def test_quoted_path_filter(self):
+        assert _split_query_terms('ext:md path:"C:\\My Documents"') == [
+            "ext:md",
+            "path:C:\\My Documents",
+        ]
+
+    def test_mixed_quoted_and_plain(self):
+        assert _split_query_terms('dupe: path:"C:\\Users\\me\\My Docs" ext:py') == [
+            "dupe:",
+            "path:C:\\Users\\me\\My Docs",
+            "ext:py",
+        ]
+
+    def test_multiple_spaces_collapsed(self):
+        assert _split_query_terms("ext:py   dm:today") == ["ext:py", "dm:today"]
+
+    def test_empty_query(self):
+        assert _split_query_terms("") == []
+
+    def test_whitespace_only(self):
+        assert _split_query_terms("   ") == []
+
+    def test_unclosed_quote_consumes_rest(self):
+        assert _split_query_terms('path:"C:\\My Documents') == ["path:C:\\My Documents"]
+
+    def test_or_and_negation_terms_pass_through(self):
+        assert _split_query_terms("project1 | project2 !node_modules") == [
+            "project1",
+            "|",
+            "project2",
+            "!node_modules",
+        ]
+
+
 # ── SearchResult ──────────────────────────────────────────────────────────
 
 
@@ -326,6 +374,28 @@ class TestEverythingBackend:
             assert "-n" not in cmd
 
     @pytest.mark.asyncio
+    async def test_search_multi_term_query_split_into_args(self, backend):
+        """Multi-term queries must become separate argv elements (AND logic)."""
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ("", "", 0)
+            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+                await backend.search("dm:today ext:md")
+            cmd = mock_run.call_args[0][0]
+            assert "dm:today" in cmd
+            assert "ext:md" in cmd
+            assert "dm:today ext:md" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_count_multi_term_query_split_into_args(self, backend):
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ("7\n", "", 0)
+            result = await backend.count('ext:md path:"C:\\My Docs"')
+            assert result == 7
+            cmd = mock_run.call_args[0][0]
+            assert "ext:md" in cmd
+            assert "path:C:\\My Docs" in cmd
+
+    @pytest.mark.asyncio
     async def test_count_error(self, backend):
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "error", 1)
@@ -341,6 +411,17 @@ class TestEverythingBackend:
             cmd = mock_run.call_args[0][0]
             assert "-get-total-size" in cmd
             assert "-n" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_get_total_size_multi_term_query_split_into_args(self, backend):
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ("2048\n", "", 0)
+            result = await backend.get_total_size("ext:log dm:today")
+            assert result == 2048
+            cmd = mock_run.call_args[0][0]
+            assert "ext:log" in cmd
+            assert "dm:today" in cmd
+            assert "ext:log dm:today" not in cmd
 
     @pytest.mark.asyncio
     async def test_health_check_ok(self, backend):

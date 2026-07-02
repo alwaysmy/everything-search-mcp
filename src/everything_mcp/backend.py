@@ -206,7 +206,10 @@ class EverythingBackend:
         """Return the number of results for *query* without listing them."""
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
-        cmd.extend(["-get-result-count", query])
+        cmd.append("-get-result-count")
+        # Same argv handling as search(): multi-term queries need separate
+        # args for AND logic (see _split_query_terms).
+        cmd.extend(_split_query_terms(query))
         stdout, stderr, rc = await self._run(cmd)
 
         if rc != 0:
@@ -221,7 +224,10 @@ class EverythingBackend:
         """Return the total size in bytes of all files matching *query*."""
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
-        cmd.extend(["-get-total-size", query])
+        cmd.append("-get-total-size")
+        # Same argv handling as search(): multi-term queries need separate
+        # args for AND logic (see _split_query_terms).
+        cmd.extend(_split_query_terms(query))
         stdout, stderr, rc = await self._run(cmd)
 
         if rc != 0:

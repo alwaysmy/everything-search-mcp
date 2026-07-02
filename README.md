@@ -90,6 +90,8 @@ Inside Claude Code, run:
 ```
 
 The plugin bundles the MCP server config - no JSON editing needed (requires [uv](https://docs.astral.sh/uv/)).
+It also ships an `everything-search` skill that teaches Claude the Everything
+query syntax and when to reach for these tools instead of slow directory walks.
 
 ### Via uv (recommended - no install needed)
 
@@ -135,7 +137,8 @@ Use this server definition anywhere a client asks for MCP JSON:
 <details>
 <summary>Claude Code</summary>
 
-Easiest - install as a plugin (bundles the MCP server automatically):
+Easiest - install as a plugin (bundles the MCP server plus an
+`everything-search` skill that teaches Claude the query syntax):
 
 ```
 /plugin marketplace add elis132/everything-mcp

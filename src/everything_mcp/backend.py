@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import locale
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -153,6 +154,7 @@ class EverythingBackend:
         match_regex: bool = False,
         match_path: bool = False,
         offset: int = 0,
+        path_filter: str = "",
     ) -> list[SearchResult]:
         """Execute a search query and return enriched results.
 
@@ -180,6 +182,12 @@ class EverythingBackend:
         if match_path:
             cmd.append("-p")
 
+        # Path restriction via es.exe's native -path switch.  This avoids the
+        # quoting/escaping issues that happen when embedding path:"..." in the
+        # query string on Windows (subprocess escapes the double quotes).
+        if path_filter:
+            cmd.extend(["-path", _normalize_path(path_filter)])
+
         # NOTE: We intentionally omit -size / -dm / -dc.  Keeping es.exe
         # output as plain one-path-per-line makes parsing trivial and
         # version-independent.  Metadata comes from os.stat() below.
@@ -202,11 +210,13 @@ class EverythingBackend:
 
     # ── Aggregate queries ─────────────────────────────────────────────
 
-    async def count(self, query: str) -> int:
+    async def count(self, query: str, path_filter: str = "") -> int:
         """Return the number of results for *query* without listing them."""
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
         cmd.append("-get-result-count")
+        if path_filter:
+            cmd.extend(["-path", _normalize_path(path_filter)])
         # Same argv handling as search(): multi-term queries need separate
         # args for AND logic (see _split_query_terms).
         cmd.extend(_split_query_terms(query))
@@ -217,11 +227,13 @@ class EverythingBackend:
 
         return _parse_es_number(stdout)
 
-    async def get_total_size(self, query: str) -> int:
+    async def get_total_size(self, query: str, path_filter: str = "") -> int:
         """Return the total size in bytes of all files matching *query*."""
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
         cmd.append("-get-total-size")
+        if path_filter:
+            cmd.extend(["-path", _normalize_path(path_filter)])
         # Same argv handling as search(): multi-term queries need separate
         # args for AND logic (see _split_query_terms).
         cmd.extend(_split_query_terms(query))
@@ -452,15 +464,19 @@ def build_type_query(file_type: str, additional_query: str = "", path_filter: st
     """Build a search query for a specific file type category.
 
     Raises :class:`ValueError` if *file_type* is not a known category.
+
+    The *path_filter* argument is accepted for backward compatibility but is
+    intentionally ignored here; callers should pass the path to
+    :meth:`EverythingBackend.search` via its ``path_filter`` parameter, which
+    uses the es.exe ``-path`` switch and avoids quoting issues on Windows.
     """
+    del path_filter  # routed through backend.search(path_filter=...)
     key = file_type.lower().strip()
     if key not in FILE_TYPES:
         available = ", ".join(sorted(FILE_TYPES.keys()))
         raise ValueError(f"Unknown file type '{file_type}'. Available: {available}")
 
     parts = [FILE_TYPES[key]]
-    if path_filter:
-        parts.append(f'path:"{path_filter}"')
     if additional_query:
         parts.append(additional_query)
     return " ".join(parts)
@@ -471,12 +487,16 @@ def build_recent_query(
     path_filter: str = "",
     extensions: str = "",
 ) -> str:
-    """Build a search query for recently modified files."""
+    """Build a search query for recently modified files.
+
+    The *path_filter* argument is accepted for backward compatibility but is
+    intentionally ignored here; callers should pass the path to
+    :meth:`EverythingBackend.search` via its ``path_filter`` parameter.
+    """
+    del path_filter  # routed through backend.search(path_filter=...)
     time_value = TIME_PERIODS.get(period, period)
     parts = [f"dm:{time_value}"]
 
-    if path_filter:
-        parts.append(f'path:"{path_filter}"')
     if extensions:
         # Normalize "py,js" or ".py,.js" or "py;js" → "py;js"
         exts = extensions.replace(".", "").replace(",", ";").replace(" ", ";")
@@ -488,6 +508,20 @@ def build_recent_query(
 
 
 # ── Utility functions ─────────────────────────────────────────────────────
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize a filesystem path for the es.exe ``-path`` switch.
+
+    Backslashes are converted to forward slashes (which Everything accepts)
+    and a trailing path separator is removed, except for a drive root.
+    """
+    if not path:
+        return ""
+    normalized = path.replace("\\", "/")
+    if len(normalized) > 3 and normalized.endswith("/"):
+        normalized = normalized[:-1]
+    return normalized
 
 
 def human_size(size: int) -> str:

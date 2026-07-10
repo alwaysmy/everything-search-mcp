@@ -101,17 +101,28 @@ class SearchInput(BaseModel):
         description=(
             "Search query using Everything syntax. Examples: "
             "'*.py' (all Python files), "
-            "'ext:py;js path:C:\\Projects' (Python/JS in Projects), "
+            "'ext:py;js' (Python/JS files), "
             "'size:>10mb ext:log' (large logs), "
             "'dm:today ext:py' (Python files modified today), "
             "'content:TODO ext:py' (files containing TODO - requires content indexing), "
             "'\"exact phrase\"' (exact filename match), "
             "'regex:test_\\d+\\.py$' (regex). "
-            "Combine with space (AND) or | (OR). Prefix ! to exclude."
+            "Combine with space (AND) or | (OR). Prefix ! to exclude. "
+            "For path restrictions, prefer the dedicated 'path' parameter."
         ),
         min_length=1,
         max_length=2000,
     )
+
+    path: str = Field(
+        default="",
+        description=(
+            "Restrict search to this directory. "
+            "Backslashes and spaces are handled automatically. "
+            "Prefer this over embedding 'path:' in the query string."
+        ),
+    )
+
     max_results: int = Field(
         default=50,
         description="Maximum results to return (1-500)",
@@ -169,6 +180,7 @@ async def everything_search(params: SearchInput) -> str:
             match_regex=params.match_regex,
             match_path=params.match_path,
             offset=params.offset,
+            path_filter=params.path,
         )
         return _format_search_results(results, params.query, params.max_results, params.offset)
     except Exception as exc:
@@ -228,11 +240,12 @@ async def everything_search_by_type(params: SearchByTypeInput) -> str:
     """
     try:
         backend = _get_backend()
-        query = build_type_query(params.file_type, params.query, params.path)
+        query = build_type_query(params.file_type, params.query)
         results = await backend.search(
             query=query,
             max_results=params.max_results,
             sort=params.sort,
+            path_filter=params.path,
         )
         label = f"type:{params.file_type}" + (f" {params.query}" if params.query else "")
         return _format_search_results(results, label, params.max_results)

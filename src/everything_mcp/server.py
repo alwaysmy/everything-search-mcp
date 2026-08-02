@@ -472,6 +472,24 @@ class CountStatsInput(BaseModel):
         default=False,
         description="Break down count and size by file extension (samples top 200 results)",
     )
+    sample_sort: str = Field(
+        default="date-modified-desc",
+        description=(
+            "Sort order used when sampling files for the extension breakdown. "
+            "Default is date-modified-desc: file-name sort (name/name-desc) is "
+            "correlated with extensions and biases the sample; date/other keys "
+            "give a more representative mix."
+        ),
+    )
+
+    @field_validator("sample_sort")
+    @classmethod
+    def validate_sample_sort(cls, v: str) -> str:
+        if v not in SORT_MAP:
+            raise ValueError(
+                f"Invalid sample_sort '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}"
+            )
+        return v
 
 
 @mcp.tool(
@@ -525,7 +543,7 @@ async def everything_count_stats(params: CountStatsInput) -> str:
                 results = await backend.search(
                     params.query,
                     max_results=sample_limit,
-                    sort="name",
+                    sort=params.sample_sort,
                 )
                 ext_stats: dict[str, dict] = {}
                 sampled_files = 0
@@ -550,7 +568,8 @@ async def everything_count_stats(params: CountStatsInput) -> str:
                 output["extension_breakdown"] = breakdown
                 output["breakdown_note"] = (
                     f"Based on {sampled_files} sampled files from first {len(results)} "
-                    f"results (max sample {sample_limit}); directories excluded."
+                    f"results (max sample {sample_limit}, sorted by {params.sample_sort}); "
+                    f"directories excluded."
                 )
             except Exception as exc:
                 output["breakdown_error"] = str(exc)

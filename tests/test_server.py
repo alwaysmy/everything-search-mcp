@@ -253,6 +253,52 @@ class TestToolSuccessPaths:
             server._config = old_config
 
     @pytest.mark.asyncio
+    async def test_count_stats_sample_sort(self):
+        """sample_sort controls the order used when sampling the breakdown."""
+        from everything_mcp import server
+        from everything_mcp.config import EverythingConfig
+        from everything_mcp.server import CountStatsInput, everything_count_stats
+
+        seen_sorts: list[str] = []
+
+        class FakeBackend:
+            async def count(self, query: str) -> int:
+                return 1
+
+            async def get_total_size(self, query: str) -> int:
+                return 100
+
+            async def search(self, query: str, max_results: int, sort: str):
+                seen_sorts.append(sort)
+                return [SearchResult(path=r"C:\repo\a.py", name="a.py", size=100)]
+
+        old_backend = server._backend
+        old_config = server._config
+        try:
+            server._backend = FakeBackend()
+            server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
+
+            # Default should be date-modified-desc (unbiased sampling).
+            await everything_count_stats(
+                CountStatsInput(query="*.py", breakdown_by_extension=True)
+            )
+            assert seen_sorts == ["date-modified-desc"]
+
+            # Custom sort is honoured.
+            seen_sorts.clear()
+            await everything_count_stats(
+                CountStatsInput(query="*.py", breakdown_by_extension=True, sample_sort="size")
+            )
+            assert seen_sorts == ["size"]
+
+            # Invalid sort is rejected by the validator.
+            with pytest.raises(ValueError, match="Invalid sample_sort"):
+                CountStatsInput(query="*.py", sample_sort="bogus")
+        finally:
+            server._backend = old_backend
+            server._config = old_config
+
+    @pytest.mark.asyncio
     async def test_search_include_total(self):
         """include_total appends the overall match count to the result text."""
         from everything_mcp import server

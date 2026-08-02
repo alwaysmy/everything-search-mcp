@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -506,6 +507,44 @@ class TestEverythingBackend:
         backend = EverythingBackend(invalid_config)
         status = await backend.health_check()
         assert status["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_run_timeout_raises(self, backend):
+        """_run surfaces a friendly error when es.exe times out."""
+        with patch(
+            "everything_mcp.backend.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+        ) as mock_create:
+            mock_proc = mock_create.return_value
+            mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+            mock_proc.kill = Mock()
+            with pytest.raises(RuntimeError, match="timed out"):
+                await backend._run([backend.config.es_path, "-n", "1", "*.py"])
+            mock_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_file_not_found_raises(self, backend):
+        """_run surfaces a clear error when es.exe itself is missing."""
+        with patch(
+            "everything_mcp.backend.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+        ) as mock_create:
+            mock_create.side_effect = FileNotFoundError
+            with pytest.raises(RuntimeError, match="es.exe not found"):
+                await backend._run([backend.config.es_path])
+
+    def test_decode_output_bom(self):
+        assert _decode_output(b"\xef\xbb\xbfhello") == "hello"
+
+    def test_decode_output_utf8_fallback(self):
+        # valid utf-8 passes through
+        assert _decode_output("中文".encode("utf-8")) == "中文"
+
+    def test_looks_like_path_more_cases(self):
+        assert _looks_like_path("C:\\") is True  # drive root
+        assert _looks_like_path(r"C:") is False  # bare drive letter, no slash
+        assert _looks_like_path("\\\\server\\share") is True  # UNC
+        assert _looks_like_path("/home/x") is True  # unix style
 
 
 # ── SORT_MAP / FILE_TYPES / TIME_PERIODS consistency ─────────────────────

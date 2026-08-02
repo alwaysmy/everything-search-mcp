@@ -145,6 +145,65 @@ class TestReadPreview:
         assert "preview truncated" in result
 
 
+# ── _summarize_directory ──────────────────────────────────────────────────
+
+
+class TestSummarizeDirectory:
+    def test_truncated_at_scan_cap(self, tmp_path, monkeypatch):
+        """Scanning more entries than _MAX_DIR_SCAN_ITEMS sets the cap note."""
+        from everything_mcp.server import _MAX_DIR_SCAN_ITEMS, _summarize_directory
+
+        class FakeEntry:
+            def __init__(self, name, is_dir=False):
+                self._name = name
+                self._is_dir = is_dir
+
+            @property
+            def name(self):
+                return self._name
+
+            def is_dir(self, follow_symlinks=False):
+                return self._is_dir
+
+            def is_file(self, follow_symlinks=False):
+                return not self._is_dir
+
+        fake_entries = [FakeEntry(f"f{i}.txt") for i in range(_MAX_DIR_SCAN_ITEMS + 5)]
+
+        class FakeScandir:
+            def __init__(self, entries):
+                self._entries = entries
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                return iter(self._entries)
+
+        monkeypatch.setattr(
+            "everything_mcp.server.os.scandir",
+            lambda path: FakeScandir(fake_entries),
+        )
+
+        summary = _summarize_directory(tmp_path)
+        assert "capped" in summary["note"]
+        assert summary["item_count"] == _MAX_DIR_SCAN_ITEMS
+
+    def test_many_entries_sample_note(self, tmp_path):
+        """More entries than the sample sizes get a 'Showing first' note."""
+        from everything_mcp.server import _summarize_directory
+
+        for i in range(60):
+            (tmp_path / f"file{i}.txt").write_text("x")
+
+        summary = _summarize_directory(tmp_path)
+        assert "Showing first" in summary["note"]
+        assert len(summary["files_sample"]) <= 30
+
+
 # ── Extension/filename sets ───────────────────────────────────────────────
 
 

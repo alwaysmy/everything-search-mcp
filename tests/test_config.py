@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from everything_mcp.config import (
     EverythingConfig,
     _detect_instance,
+    _find_es_exe,
     _is_everything_es,
     _test_connection,
 )
@@ -196,6 +197,51 @@ class TestIsEverythingEs:
         """Some other 'es' binary that doesn't support -get-everything-version."""
         with patch("subprocess.run", side_effect=FileNotFoundError):
             assert _is_everything_es(r"C:\not-es.exe") is False
+
+
+# ── _find_es_exe ──────────────────────────────────────────────────────────
+
+
+class TestFindEsExe:
+    def test_env_file_path(self, tmp_path):
+        exe = tmp_path / "es.exe"
+        exe.write_text("x")
+        with patch("everything_mcp.config._is_everything_es", return_value=True):
+            assert _find_es_exe(str(exe)) == str(exe)
+
+    def test_env_dir_path(self, tmp_path):
+        exe = tmp_path / "es.exe"
+        exe.write_text("x")
+        with patch("everything_mcp.config._is_everything_es", return_value=True):
+            assert _find_es_exe(str(tmp_path)) == str(exe)
+
+    def test_env_invalid_falls_back_to_path(self):
+        with (
+            patch("everything_mcp.config._is_everything_es", return_value=True),
+            patch("everything_mcp.config.shutil.which", return_value=r"C:\path\es.exe"),
+        ):
+            assert _find_es_exe(r"C:\nope\missing.exe") == r"C:\path\es.exe"
+
+    def test_search_dirs_found(self, tmp_path):
+        exe = tmp_path / "es.exe"
+        exe.write_text("x")
+        with (
+            patch("everything_mcp.config._is_everything_es", return_value=True),
+            patch("everything_mcp.config.shutil.which", return_value=None),
+            patch(
+                "everything_mcp.config.ES_SEARCH_PATHS",
+                [str(tmp_path)],
+            ),
+        ):
+            assert _find_es_exe("") == str(exe)
+
+    def test_nothing_found_returns_empty(self):
+        with (
+            patch("everything_mcp.config._is_everything_es", return_value=False),
+            patch("everything_mcp.config.shutil.which", return_value=None),
+            patch("everything_mcp.config._find_via_registry", return_value=""),
+        ):
+            assert _find_es_exe("") == ""
 
     def test_timeout(self):
         import subprocess

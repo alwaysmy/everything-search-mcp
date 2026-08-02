@@ -894,7 +894,9 @@ def _read_preview(path: Path, max_lines: int) -> str | None:
         return None
 
     # Read lines with encoding fallback
-    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+    # Note: gb18030 (superset of GBK) covers Chinese Windows text files that
+    # are not UTF-8; latin-1 is the final catch-all (never fails).
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
         try:
             with open(path, encoding=encoding) as f:
                 lines: list[str] = []

@@ -185,8 +185,15 @@ class EverythingBackend:
         # Path restriction via es.exe's native -path switch.  This avoids the
         # quoting/escaping issues that happen when embedding path:"..." in the
         # query string on Windows (subprocess escapes the double quotes).
-        if path_filter:
-            cmd.extend(["-path", _normalize_path(path_filter)])
+        # If the caller did not pass an explicit path_filter, we still honour a
+        # path:"..." clause embedded in the query string by extracting it here;
+        # otherwise _split_query_terms would strip the quotes and split paths
+        # containing spaces, silently returning wrong/empty results.
+        effective_path = path_filter
+        if not effective_path:
+            query, effective_path = _extract_path_filter(query)
+        if effective_path:
+            cmd.extend(["-path", _normalize_path(effective_path)])
 
         # NOTE: We intentionally omit -size / -dm / -dc.  Keeping es.exe
         # output as plain one-path-per-line makes parsing trivial and
@@ -215,8 +222,13 @@ class EverythingBackend:
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
         cmd.append("-get-result-count")
-        if path_filter:
-            cmd.extend(["-path", _normalize_path(path_filter)])
+        # Honour a path:"..." clause embedded in the query string (same
+        # reasoning as in search()).
+        effective_path = path_filter
+        if not effective_path:
+            query, effective_path = _extract_path_filter(query)
+        if effective_path:
+            cmd.extend(["-path", _normalize_path(effective_path)])
         # Same argv handling as search(): multi-term queries need separate
         # args for AND logic (see _split_query_terms).
         cmd.extend(_split_query_terms(query))
@@ -232,8 +244,13 @@ class EverythingBackend:
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
         cmd.append("-get-total-size")
-        if path_filter:
-            cmd.extend(["-path", _normalize_path(path_filter)])
+        # Honour a path:"..." clause embedded in the query string (same
+        # reasoning as in search()).
+        effective_path = path_filter
+        if not effective_path:
+            query, effective_path = _extract_path_filter(query)
+        if effective_path:
+            cmd.extend(["-path", _normalize_path(effective_path)])
         # Same argv handling as search(): multi-term queries need separate
         # args for AND logic (see _split_query_terms).
         cmd.extend(_split_query_terms(query))
@@ -522,6 +539,31 @@ def _normalize_path(path: str) -> str:
     if len(normalized) > 3 and normalized.endswith("/"):
         normalized = normalized[:-1]
     return normalized
+
+
+# Matches a ``path:`` clause inside a query string.  Handles both quoted
+# (path:"C:\My Documents") and bare (path:C:\Projects) forms.
+_PATH_CLAUSE_RE = re.compile(r'path:("(?:[^"\\]|\\.)*"|\S+)', re.IGNORECASE)
+
+
+def _extract_path_filter(query: str) -> tuple[str, str]:
+    """Extract the first ``path:`` clause from *query*.
+
+    Returns ``(clean_query, path_value)``.  The matched clause is removed
+    from the query; the path value (with quotes stripped) is returned so the
+    caller can pass it to es.exe via the ``-path`` switch.
+
+    This prevents ``_split_query_terms`` from stripping the quotes and
+    splitting paths that contain spaces into separate AND terms, which would
+    silently return wrong or empty results.
+    """
+    m = _PATH_CLAUSE_RE.search(query)
+    if not m:
+        return query, ""
+    raw = m.group(1)
+    path_value = raw.strip('"')
+    clean = (query[: m.start()] + " " + query[m.end():]).strip()
+    return clean, path_value
 
 
 def human_size(size: int) -> str:

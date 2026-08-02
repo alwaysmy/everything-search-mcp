@@ -297,6 +297,15 @@ class FindRecentInput(BaseModel):
     )
     query: str = Field(default="", description="Additional search filter")
     max_results: int = Field(default=50, ge=1, le=500)
+    auto_expand: bool = Field(
+        default=True,
+        description=(
+            "When the time period yields fewer than max_results hits, retry "
+            "without the time restriction (all time).  Results still carry "
+            "date_modified so the AI can judge recency.  Set false to keep a "
+            "strict period."
+        ),
+    )
 
 
 @mcp.tool(
@@ -328,7 +337,29 @@ async def everything_find_recent(params: FindRecentInput) -> str:
             sort="date-modified-desc",
             path_filter=params.path,
         )
-        return _format_search_results(results, f"recent ({params.period})", params.max_results)
+
+        # Auto-expand: if the strict period returned fewer results than
+        # requested, retry without the time restriction so the AI still gets
+        # a useful set.  Results keep their date_modified metadata.
+        expanded = False
+        if params.auto_expand and 0 < len(results) < params.max_results:
+            query_all = build_recent_query("", extensions=params.extensions)
+            if params.query:
+                query_all = f"{query_all} {params.query}"
+            results_all = await backend.search(
+                query=query_all,
+                max_results=params.max_results,
+                sort="date-modified-desc",
+                path_filter=params.path,
+            )
+            if len(results_all) > len(results):
+                results = results_all
+                expanded = True
+
+        label = f"recent ({params.period})"
+        if expanded:
+            label += " [auto-expanded to all time]"
+        return _format_search_results(results, label, params.max_results)
     except Exception as exc:
         return f"Error: {exc}"
 

@@ -507,9 +507,13 @@ def build_recent_query(
     Path restrictions are NOT part of the query string; callers should pass
     the path to :meth:`EverythingBackend.search` via its ``path_filter``
     parameter.
+
+    Passing ``period=""`` omits the ``dm:`` clause entirely (all time).
     """
-    time_value = TIME_PERIODS.get(period, period)
-    parts = [f"dm:{time_value}"]
+    parts: list[str] = []
+    if period:
+        time_value = TIME_PERIODS.get(period, period)
+        parts.append(f"dm:{time_value}")
 
     if extensions:
         # Normalize "py,js" or ".py,.js" or "py;js" → "py;js"

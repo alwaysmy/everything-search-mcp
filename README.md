@@ -210,7 +210,9 @@ Parameters: `file_type` *(required)*, `query`, `path`, `max_results`, `sort`
 
 Periods: `1min` … `12hours`, `today`, `yesterday`, `1day` … `1year`
 
-Parameters: `period` (default `1day`), `path`, `extensions`, `query`, `max_results`
+Parameters: `period` (default `1day`), `path`, `extensions`, `query`, `max_results`, `auto_expand` (default true)
+
+When the period yields fewer results than `max_results`, `auto_expand` retries without the time restriction (all time) so the call still returns a useful set; the result label notes `[auto-expanded to all time]`. Pass `auto_expand=false` for a strict period.
 
 ### 4. `everything_file_details` - deep inspection
 

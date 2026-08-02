@@ -50,6 +50,8 @@ regex:^test_.*\.py$           regex (or pass match_regex=true)
 - Locate a project someone mentioned: `everything_search(query="folder: myproject")`
 - Find a config file of unknown location: `everything_search(query="wg0.conf | wireguard ext:conf")`
 - Recently downloaded file: `everything_find_recent(period="1day", path="C:\\Users\\<user>\\Downloads")`
+- `everything_find_recent` auto-expands to all time when the period returns
+  fewer than `max_results` results (pass `auto_expand=false` for a strict window).
 - Disk usage of build artifacts: `everything_count_stats(query="node_modules folder:", include_size=true, breakdown_by_extension=true)`
 - Total number of matches without listing: `everything_search(query="ext:py", max_results=1, include_total=true)`
 - Then inspect what you found: `everything_file_details(paths=[...], preview_lines=30)`

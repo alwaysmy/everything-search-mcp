@@ -190,6 +190,11 @@ class TestBuildRecentQuery:
         q = build_recent_query()
         assert "dm:last1day" in q
 
+    def test_empty_period_omits_dm(self):
+        q = build_recent_query("")
+        assert "dm:" not in q
+        assert q == ""
+
     def test_today(self):
         q = build_recent_query("today")
         assert "dm:today" in q

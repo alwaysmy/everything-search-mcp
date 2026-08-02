@@ -355,6 +355,56 @@ class TestToolSuccessPaths:
             server._backend = old_backend
             server._config = old_config
 
+    @pytest.mark.asyncio
+    async def test_find_recent_auto_expand(self):
+        """Few results in the period trigger an all-time retry (default on)."""
+        from everything_mcp import server
+        from everything_mcp.config import EverythingConfig
+        from everything_mcp.server import FindRecentInput, everything_find_recent
+
+        queries_seen: list[str] = []
+
+        class FakeBackend:
+            async def search(self, query, max_results, sort, path_filter=""):
+                queries_seen.append(query)
+                # first (period) call returns 2, second (all-time) returns 3
+                if "dm:last1day" in query:
+                    return [
+                        SearchResult(path=r"C:\a.py", name="a.py"),
+                        SearchResult(path=r"C:\b.py", name="b.py"),
+                    ]
+                return [
+                    SearchResult(path=r"C:\a.py", name="a.py"),
+                    SearchResult(path=r"C:\b.py", name="b.py"),
+                    SearchResult(path=r"C:\c.py", name="c.py"),
+                ]
+
+        old_backend = server._backend
+        old_config = server._config
+        try:
+            server._backend = FakeBackend()
+            server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
+
+            # auto_expand on (default): retries without dm:, label notes it
+            result = await everything_find_recent(
+                FindRecentInput(period="1day", max_results=5)
+            )
+            assert "auto-expanded" in result
+            assert "3 results" in result
+            assert queries_seen == ["dm:last1day", ""] or queries_seen[-1] == ""
+
+            # auto_expand off: no retry, label is plain
+            queries_seen.clear()
+            result2 = await everything_find_recent(
+                FindRecentInput(period="1day", max_results=5, auto_expand=False)
+            )
+            assert "auto-expanded" not in result2
+            assert len(queries_seen) == 1
+            assert queries_seen[0] == "dm:last1day"
+        finally:
+            server._backend = old_backend
+            server._config = old_config
+
 
 class TestToolErrorHandling:
     """Verify that tools return error strings rather than raising."""

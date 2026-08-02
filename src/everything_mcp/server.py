@@ -387,7 +387,21 @@ def _get_file_details_sync(paths: list[str], preview_lines: int) -> str:
     output_parts: list[str] = []
 
     for filepath in paths:
-        p = Path(filepath)
+        raw = Path(filepath)
+
+        # Reject non-absolute paths: relative paths would resolve against the
+        # MCP server's working directory, which callers cannot predict.
+        if not raw.is_absolute():
+            info: dict = {
+                "path": filepath,
+                "error": "Path must be absolute (e.g. C:\\folder\\file)",
+            }
+            output_parts.append(json.dumps(info, indent=2, ensure_ascii=False))
+            continue
+
+        # Normalize the path: expand "..", resolve junctions/symlinks, and
+        # canonicalize separators so the returned path is unambiguous.
+        p = raw.resolve()
         info: dict = {"path": str(p)}
 
         if not p.exists():
@@ -414,7 +428,7 @@ def _get_file_details_sync(paths: list[str], preview_lines: int) -> str:
             info["date_accessed"] = datetime.fromtimestamp(stat.st_atime).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-            info["read_only"] = not os.access(filepath, os.W_OK)
+            info["read_only"] = not os.access(str(p), os.W_OK)
 
             # Windows hidden attribute or Unix dotfile
             file_attrs = getattr(stat, "st_file_attributes", 0)
@@ -459,10 +473,17 @@ class CountStatsInput(BaseModel):
         ...,
         description=(
             "Search query to count/measure.  Same syntax as everything_search. "
-            "Examples: 'ext:py path:C:\\Projects', 'ext:log size:>1mb', '*.tmp'"
+            "Examples: 'ext:py', 'ext:log size:>1mb', '*.tmp'"
         ),
         min_length=1,
         max_length=2000,
+    )
+    path: str = Field(
+        default="",
+        description=(
+            "Restrict counting to this directory. "
+            "Prefer this over embedding 'path:' in the query string."
+        ),
     )
     include_size: bool = Field(
         default=True,
@@ -511,10 +532,12 @@ async def everything_count_stats(params: CountStatsInput) -> str:
     try:
         backend = _get_backend()
         output: dict = {"query": params.query}
+        if params.path:
+            output["path"] = params.path
 
         # Count
         try:
-            total_count = await backend.count(params.query)
+            total_count = await backend.count(params.query, path_filter=params.path)
             if total_count >= 0:
                 output["total_count"] = total_count
             else:
@@ -527,7 +550,9 @@ async def everything_count_stats(params: CountStatsInput) -> str:
         # Total size
         if params.include_size:
             try:
-                total_size = await backend.get_total_size(params.query)
+                total_size = await backend.get_total_size(
+                    params.query, path_filter=params.path
+                )
                 if total_size >= 0:
                     output["total_size"] = total_size
                     output["total_size_human"] = human_size(total_size)
@@ -544,6 +569,7 @@ async def everything_count_stats(params: CountStatsInput) -> str:
                     params.query,
                     max_results=sample_limit,
                     sort=params.sample_sort,
+                    path_filter=params.path,
                 )
                 ext_stats: dict[str, dict] = {}
                 sampled_files = 0

@@ -31,7 +31,7 @@ Space between terms = AND. Key operators:
 report.pdf                    name contains "report.pdf"
 *.py                          extension wildcard
 ext:py;js;ts                  multiple extensions
-path:C:\Projects ext:py       restrict to a directory tree
+path:C:\Projects ext:py       restrict to a directory tree (or use the path argument)
 size:>10mb  size:1kb..1mb     size filters
 dm:today  dm:last1week        modified date
 dc:2024                       created date

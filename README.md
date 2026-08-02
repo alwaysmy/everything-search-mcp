@@ -146,6 +146,7 @@ Everything MCP auto-detects your setup, but you can override:
 | `EVERYTHING_ES_PATH` | Path to es.exe | `C:\Program Files\Everything\es.exe` |
 | `EVERYTHING_INSTANCE` | Named Everything instance | `1.5a` |
 | `EVERYTHING_MAX_RESULTS_CAP` | Hard cap on results per search (default `1000`) | `200` |
+| `EVERYTHING_TIMEOUT` | es.exe call timeout in seconds (default `30`) | `60` |
 
 > Only set `EVERYTHING_INSTANCE` if you explicitly configured a named instance
 > in Everything (Tools → Options → General → Instance). Most installs -
@@ -219,7 +220,7 @@ Returns full metadata; for directories, item count and listing; for text files w
 
 ### 5. `everything_count_stats` - quick analytics
 
-Parameters: `query` *(required)*, `include_size` (default true), `breakdown_by_extension`, `sample_sort` (default `date-modified-desc`)
+Parameters: `query` *(required)*, `path`, `include_size` (default true), `breakdown_by_extension`, `sample_sort` (default `date-modified-desc`)
 
 Count and size stats without listing every file - check scope before a big search.
 

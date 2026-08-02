@@ -477,17 +477,16 @@ def _split_query_terms(query: str) -> list[str]:
 # ── Query builders ────────────────────────────────────────────────────────
 
 
-def build_type_query(file_type: str, additional_query: str = "", path_filter: str = "") -> str:
+def build_type_query(file_type: str, additional_query: str = "") -> str:
     """Build a search query for a specific file type category.
 
     Raises :class:`ValueError` if *file_type* is not a known category.
 
-    The *path_filter* argument is accepted for backward compatibility but is
-    intentionally ignored here; callers should pass the path to
-    :meth:`EverythingBackend.search` via its ``path_filter`` parameter, which
-    uses the es.exe ``-path`` switch and avoids quoting issues on Windows.
+    Path restrictions are NOT part of the query string; callers should pass
+    the path to :meth:`EverythingBackend.search` via its ``path_filter``
+    parameter, which uses the es.exe ``-path`` switch and avoids quoting
+    issues on Windows.
     """
-    del path_filter  # routed through backend.search(path_filter=...)
     key = file_type.lower().strip()
     if key not in FILE_TYPES:
         available = ", ".join(sorted(FILE_TYPES.keys()))
@@ -501,16 +500,14 @@ def build_type_query(file_type: str, additional_query: str = "", path_filter: st
 
 def build_recent_query(
     period: str = "1hour",
-    path_filter: str = "",
     extensions: str = "",
 ) -> str:
     """Build a search query for recently modified files.
 
-    The *path_filter* argument is accepted for backward compatibility but is
-    intentionally ignored here; callers should pass the path to
-    :meth:`EverythingBackend.search` via its ``path_filter`` parameter.
+    Path restrictions are NOT part of the query string; callers should pass
+    the path to :meth:`EverythingBackend.search` via its ``path_filter``
+    parameter.
     """
-    del path_filter  # routed through backend.search(path_filter=...)
     time_value = TIME_PERIODS.get(period, period)
     parts = [f"dm:{time_value}"]
 

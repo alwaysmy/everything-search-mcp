@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -212,6 +213,20 @@ class TestToolSuccessPaths:
         assert isinstance(data["subdirectories"], list)
         assert isinstance(data["files_sample"], list)
 
+    def test_file_details_rejects_relative_path(self):
+        result = _get_file_details_sync(["relative\\file.txt"], preview_lines=0)
+        data = json.loads(result)
+        assert data["error"] == "Path must be absolute (e.g. C:\\folder\\file)"
+
+    def test_file_details_normalizes_dotdot(self, tmp_path):
+        (tmp_path / "a.txt").write_text("alpha")
+        # "sub/.." resolves back to tmp_path
+        weird = str(tmp_path / "sub" / "..")
+        result = _get_file_details_sync([weird], preview_lines=0)
+        data = json.loads(result)
+        assert data["type"] == "folder"
+        assert Path(data["path"]) == tmp_path
+
     @pytest.mark.asyncio
     async def test_count_stats_breakdown_excludes_directories(self):
         from everything_mcp import server
@@ -219,13 +234,17 @@ class TestToolSuccessPaths:
         from everything_mcp.server import CountStatsInput, everything_count_stats
 
         class FakeBackend:
-            async def count(self, query: str) -> int:
+            seen_paths: list[str] = []
+
+            async def count(self, query: str, path_filter: str = "") -> int:
+                self.seen_paths.append(path_filter)
                 return 3
 
-            async def get_total_size(self, query: str) -> int:
+            async def get_total_size(self, query: str, path_filter: str = "") -> int:
                 return 1300
 
-            async def search(self, query: str, max_results: int, sort: str):
+            async def search(self, query: str, max_results: int, sort: str, path_filter: str = ""):
+                self.seen_paths.append(path_filter)
                 return [
                     SearchResult(path=r"C:\repo\a.py", name="a.py", size=1200, extension="py"),
                     SearchResult(path=r"C:\repo\README", name="README", size=100, extension=""),
@@ -235,19 +254,23 @@ class TestToolSuccessPaths:
         old_backend = server._backend
         old_config = server._config
         try:
-            server._backend = FakeBackend()
+            fb = FakeBackend()
+            server._backend = fb
             server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
 
             result = await everything_count_stats(
-                CountStatsInput(query="path:C:\\repo", breakdown_by_extension=True)
+                CountStatsInput(query="ext:py", breakdown_by_extension=True, path=r"C:\repo")
             )
             data = json.loads(result)
 
             assert data["total_count"] == 3
             assert data["total_size"] == 1300
+            assert data["path"] == r"C:\repo"
             assert "py" in data["extension_breakdown"]
             assert "(no extension)" in data["extension_breakdown"]
             assert "directories excluded" in data["breakdown_note"]
+            # path must be forwarded to every backend call
+            assert all(p == r"C:\repo" for p in fb.seen_paths)
         finally:
             server._backend = old_backend
             server._config = old_config
@@ -262,13 +285,15 @@ class TestToolSuccessPaths:
         seen_sorts: list[str] = []
 
         class FakeBackend:
-            async def count(self, query: str) -> int:
+            async def count(self, query: str, path_filter: str = "") -> int:
                 return 1
 
-            async def get_total_size(self, query: str) -> int:
+            async def get_total_size(self, query: str, path_filter: str = "") -> int:
                 return 100
 
-            async def search(self, query: str, max_results: int, sort: str):
+            async def search(
+                self, query: str, max_results: int, sort: str, path_filter: str = ""
+            ):
                 seen_sorts.append(sort)
                 return [SearchResult(path=r"C:\repo\a.py", name="a.py", size=100)]
 

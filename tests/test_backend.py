@@ -150,12 +150,11 @@ class TestBuildTypeQuery:
         assert q.startswith("ext:")
         assert "py" in q
 
-    def test_with_path(self):
-        # path is no longer embedded in the query string; it is routed to
-        # backend.search(path_filter=...) and passed via the -path switch.
-        q = build_type_query("image", path_filter=r"C:\Photos")
-        assert 'path:"C:\\Photos"' not in q
-        assert 'path:' not in q
+    def test_with_path_not_embedded(self):
+        # The query builder no longer accepts/emits path clauses at all;
+        # paths are routed via backend.search(path_filter=...).
+        q = build_type_query("image")
+        assert "path" not in q.lower()
         assert "jpg" in q
 
     def test_with_additional_query(self):
@@ -164,12 +163,10 @@ class TestBuildTypeQuery:
         assert "pdf" in q
 
     def test_with_all_params(self):
-        # path_filter is accepted for backward compatibility but ignored in
-        # the query string (routed to backend.search(path_filter=...)).
-        q = build_type_query("audio", additional_query="jazz", path_filter=r"D:\Music")
+        q = build_type_query("audio", additional_query="jazz")
         assert "mp3" in q
         assert "jazz" in q
-        assert 'path:"D:\\Music"' not in q
+        assert "path" not in q.lower()
 
     def test_case_insensitive(self):
         q = build_type_query("CODE")
@@ -197,12 +194,11 @@ class TestBuildRecentQuery:
         q = build_recent_query("today")
         assert "dm:today" in q
 
-    def test_with_path(self):
-        # path is no longer embedded in the query string; it is routed to
-        # backend.search(path_filter=...) and passed via the -path switch.
-        q = build_recent_query("1week", path_filter=r"C:\Projects")
+    def test_path_not_embedded(self):
+        # The query builder no longer accepts/emits path clauses at all.
+        q = build_recent_query("1week")
         assert "dm:last1week" in q
-        assert 'path:"C:\\Projects"' not in q
+        assert "path" not in q.lower()
 
     def test_with_extensions_comma(self):
         q = build_recent_query("1hour", extensions="py,js,ts")

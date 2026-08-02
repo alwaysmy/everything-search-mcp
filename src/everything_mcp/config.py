@@ -77,6 +77,7 @@ class EverythingConfig:
         env_path = os.environ.get("EVERYTHING_ES_PATH", "").strip()
         env_instance = os.environ.get("EVERYTHING_INSTANCE", "").strip()
         env_max_results_cap = os.environ.get("EVERYTHING_MAX_RESULTS_CAP", "").strip()
+        env_timeout = os.environ.get("EVERYTHING_TIMEOUT", "").strip()
 
         if env_max_results_cap:
             try:
@@ -92,6 +93,22 @@ class EverythingConfig:
                 logger.warning(
                     "EVERYTHING_MAX_RESULTS_CAP='%s' is not a valid integer, ignoring",
                     env_max_results_cap,
+                )
+
+        if env_timeout:
+            try:
+                timeout = int(env_timeout)
+                if timeout > 0:
+                    config.timeout = timeout
+                else:
+                    logger.warning(
+                        "EVERYTHING_TIMEOUT='%s' must be positive, ignoring",
+                        env_timeout,
+                    )
+            except ValueError:
+                logger.warning(
+                    "EVERYTHING_TIMEOUT='%s' is not a valid integer, ignoring",
+                    env_timeout,
                 )
 
         if env_instance:

@@ -105,6 +105,39 @@ class TestEverythingConfig:
             config = EverythingConfig.auto_detect()
             assert config.max_results_cap == 1000
 
+    def test_auto_detect_env_timeout(self):
+        """EVERYTHING_TIMEOUT overrides the default 30s timeout."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_TIMEOUT": "60"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.timeout == 60
+
+    def test_auto_detect_env_timeout_invalid_ignored(self):
+        """A non-numeric EVERYTHING_TIMEOUT falls back to the default."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_TIMEOUT": "fast"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.timeout == 30
+
+    def test_auto_detect_env_timeout_negative_ignored(self):
+        """A non-positive EVERYTHING_TIMEOUT falls back to the default."""
+        with (
+            patch.dict("os.environ", {"EVERYTHING_TIMEOUT": "0"}),
+            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_mcp.config._detect_instance", return_value=""),
+            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+        ):
+            config = EverythingConfig.auto_detect()
+            assert config.timeout == 30
+
     def test_auto_detect_connection_fail(self):
         """When Everything isn't running, config records the error."""
         with (

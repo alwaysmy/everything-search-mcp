@@ -180,34 +180,52 @@ class EverythingBackend:
             cmd.append("-case")
         if match_whole_word:
             cmd.append("-w")
-        if match_regex:
-            cmd.append("-r")
         if match_path:
             cmd.append("-p")
 
         # Path restriction via es.exe's native -path switch.  This avoids the
         # quoting/escaping issues that happen when embedding path:"..." in the
         # query string on Windows (subprocess escapes the double quotes).
-        # If the caller did not pass an explicit path_filter, we still honour a
-        # path:"..." clause embedded in the query string by extracting it here;
-        # otherwise _split_query_terms would strip the quotes and split paths
-        # containing spaces, silently returning wrong/empty results.
+        # A single path:"..." clause is extracted and routed to -path (the
+        # only reliable way to express a space-containing path via argv).
+        # Multiple path: clauses or path param + embedded path: cannot be
+        # expressed with -path (es.exe accepts one switch only) and cannot be
+        # split safely, so we surface a clear error instead of silently
+        # returning empty results.
         effective_path = path_filter
-        if not effective_path:
-            query, effective_path = _extract_path_filter(query)
-        if effective_path:
+        query, embedded_paths = _extract_path_filter(query)
+        if effective_path and embedded_paths:
+            raise ValueError(
+                "Pass a directory either via the 'path' parameter OR an "
+                "embedded 'path:' clause in the query, not both."
+            )
+        if embedded_paths:
+            if len(embedded_paths) > 1:
+                raise ValueError(
+                    "es.exe supports only one path restriction; use a single "
+                    "'path' parameter or one 'path:' clause."
+                )
+            cmd.extend(["-path", _normalize_path(embedded_paths[0])])
+        elif effective_path:
             cmd.extend(["-path", _normalize_path(effective_path)])
 
         # NOTE: We intentionally omit -size / -dm / -dc.  Keeping es.exe
         # output as plain one-path-per-line makes parsing trivial and
         # version-independent.  Metadata comes from os.stat() below.
-        #
-        # Split query into separate args so es.exe treats spaces as AND
-        # operators.  A single quoted arg like "dm:today ext:md" would be
-        # searched as a literal string and return 0 results.
-        # Must preserve quoted sections (e.g. "exact name.txt",
-        # path:"C:\My Documents") as single tokens.
-        cmd.extend(_split_query_terms(query))
+        if match_regex:
+            # regex mode: the whole query is a single regex.  Do NOT split on
+            # spaces (that would break the regex), and prefer the regex:
+            # prefix over the -r flag: -r mangles backslash escapes through
+            # Windows argv quoting, regex: is stable.
+            if not query.lstrip().lower().startswith("regex:"):
+                cmd.append(f"regex:{query}")
+            else:
+                cmd.append(query)
+        else:
+            # Split query into separate args so es.exe treats spaces as AND
+            # operators.  A single quoted arg like "dm:today ext:md" would be
+            # searched as a literal string and return 0 results.
+            cmd.extend(_split_query_terms(query))
 
         stdout, stderr, rc = await self._run(cmd)
 
@@ -225,13 +243,23 @@ class EverythingBackend:
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
         cmd.append("-get-result-count")
-        # Honour a path:"..." clause embedded in the query string (same
-        # reasoning as in search()).
-        effective_path = path_filter
-        if not effective_path:
-            query, effective_path = _extract_path_filter(query)
-        if effective_path:
-            cmd.extend(["-path", _normalize_path(effective_path)])
+        # Same path handling as search(): single clause -> -path, conflicts
+        # raise instead of silently returning empty.
+        query, embedded_paths = _extract_path_filter(query)
+        if path_filter and embedded_paths:
+            raise ValueError(
+                "Pass a directory either via the 'path' parameter OR an "
+                "embedded 'path:' clause in the query, not both."
+            )
+        if embedded_paths:
+            if len(embedded_paths) > 1:
+                raise ValueError(
+                    "es.exe supports only one path restriction; use a single "
+                    "'path' parameter or one 'path:' clause."
+                )
+            cmd.extend(["-path", _normalize_path(embedded_paths[0])])
+        elif path_filter:
+            cmd.extend(["-path", _normalize_path(path_filter)])
         # Same argv handling as search(): multi-term queries need separate
         # args for AND logic (see _split_query_terms).
         cmd.extend(_split_query_terms(query))
@@ -247,13 +275,23 @@ class EverythingBackend:
         cmd = self._base_cmd()
         # Important: do not combine with "-n 0" because es.exe then reports 0.
         cmd.append("-get-total-size")
-        # Honour a path:"..." clause embedded in the query string (same
-        # reasoning as in search()).
-        effective_path = path_filter
-        if not effective_path:
-            query, effective_path = _extract_path_filter(query)
-        if effective_path:
-            cmd.extend(["-path", _normalize_path(effective_path)])
+        # Same path handling as search(): single clause -> -path, conflicts
+        # raise instead of silently returning empty.
+        query, embedded_paths = _extract_path_filter(query)
+        if path_filter and embedded_paths:
+            raise ValueError(
+                "Pass a directory either via the 'path' parameter OR an "
+                "embedded 'path:' clause in the query, not both."
+            )
+        if embedded_paths:
+            if len(embedded_paths) > 1:
+                raise ValueError(
+                    "es.exe supports only one path restriction; use a single "
+                    "'path' parameter or one 'path:' clause."
+                )
+            cmd.extend(["-path", _normalize_path(embedded_paths[0])])
+        elif path_filter:
+            cmd.extend(["-path", _normalize_path(path_filter)])
         # Same argv handling as search(): multi-term queries need separate
         # args for AND logic (see _split_query_terms).
         cmd.extend(_split_query_terms(query))
@@ -442,9 +480,10 @@ def _split_query_terms(query: str) -> list[str]:
     ext:md`` works but ``es.exe "dm:today ext:md"`` searches the literal
     string.
 
-    Quoted sections (Everything syntax for grouping) are kept together as
-    single tokens, then quotes are stripped because es.exe argv elements
-    are passed literally — quotes are a shell concept, not es.exe's.
+    Quoted sections are split on their internal spaces into AND terms: es.exe
+    argv cannot express exact-phrase quoting (Windows strips the quotes), so
+    ``"report 2026"`` becomes ``report`` AND ``2026`` - a close approximation
+    that returns results instead of silently matching nothing.
     """
     tokens: list[str] = []
     i = 0
@@ -469,12 +508,12 @@ def _split_query_terms(query: str) -> list[str]:
             else:
                 i += 1
         token = query[start:i]
-        # Strip quotes: es.exe receives argv literally, quotes are
-        # shell-only. path:"C:\My Path" → path:C:\My Path
+        # Quotes are shell-only, es.exe receives argv literally: strip them
+        # and split quoted phrases on spaces into AND terms.
         token = token.replace('"', "")
         if token:
-            tokens.append(token)
-    return tokens
+            tokens.extend(token.split(" "))
+    return [t for t in tokens if t]
 
 
 # ── Query builders ────────────────────────────────────────────────────────
@@ -550,24 +589,30 @@ def _normalize_path(path: str) -> str:
 _PATH_CLAUSE_RE = re.compile(r'path:("(?:[^"\\]|\\.)*"|\S+)', re.IGNORECASE)
 
 
-def _extract_path_filter(query: str) -> tuple[str, str]:
-    """Extract the first ``path:`` clause from *query*.
+def _extract_path_filter(query: str) -> tuple[str, list[str]]:
+    """Extract path clauses from *query* when safe to do so.
 
-    Returns ``(clean_query, path_value)``.  The matched clause is removed
-    from the query; the path value (with quotes stripped) is returned so the
-    caller can pass it to es.exe via the ``-path`` switch.
+    Returns ``(clean_query, [path_value, ...])``.
+
+    Rules:
+    - Exactly one ``path:`` clause -> extract it to a ``-path`` switch (this
+      is the case where quoting/escaping in argv would otherwise break paths
+      containing spaces).
+    - Zero clauses -> nothing extracted.
+    - Two or more clauses -> nothing extracted.  es.exe only accepts a single
+      ``-path`` switch, but its native query syntax handles multiple
+      ``path:`` clauses (AND/OR) correctly, so we leave them in the query.
 
     This prevents ``_split_query_terms`` from stripping the quotes and
-    splitting paths that contain spaces into separate AND terms, which would
-    silently return wrong or empty results.
+    splitting a single space-containing path into separate AND terms.
     """
-    m = _PATH_CLAUSE_RE.search(query)
-    if not m:
-        return query, ""
-    raw = m.group(1)
-    path_value = raw.strip('"')
-    clean = (query[: m.start()] + " " + query[m.end():]).strip()
-    return clean, path_value
+    matches = list(_PATH_CLAUSE_RE.finditer(query))
+    if len(matches) == 1:
+        m = matches[0]
+        raw = m.group(1)
+        clean = (query[: m.start()] + " " + query[m.end():]).strip()
+        return clean, [raw.strip('"')]
+    return query, []
 
 
 def human_size(size: int) -> str:

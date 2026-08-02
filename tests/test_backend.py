@@ -242,19 +242,23 @@ class TestSplitQueryTerms:
     def test_multi_term_and(self):
         assert _split_query_terms("dm:today ext:md") == ["dm:today", "ext:md"]
 
-    def test_quoted_phrase_kept_together(self):
-        assert _split_query_terms('"exact name.txt"') == ["exact name.txt"]
+    def test_quoted_phrase_split_into_and(self):
+        # es.exe argv cannot express exact phrases (Windows strips quotes),
+        # so quoted phrases become AND terms.
+        assert _split_query_terms('"exact name.txt"') == ["exact", "name.txt"]
 
     def test_quoted_path_filter(self):
         assert _split_query_terms('ext:md path:"C:\\My Documents"') == [
             "ext:md",
-            "path:C:\\My Documents",
+            "path:C:\\My",
+            "Documents",
         ]
 
     def test_mixed_quoted_and_plain(self):
         assert _split_query_terms('dupe: path:"C:\\Users\\me\\My Docs" ext:py') == [
             "dupe:",
-            "path:C:\\Users\\me\\My Docs",
+            "path:C:\\Users\\me\\My",
+            "Docs",
             "ext:py",
         ]
 
@@ -268,7 +272,10 @@ class TestSplitQueryTerms:
         assert _split_query_terms("   ") == []
 
     def test_unclosed_quote_consumes_rest(self):
-        assert _split_query_terms('path:"C:\\My Documents') == ["path:C:\\My Documents"]
+        assert _split_query_terms('path:"C:\\My Documents') == [
+            "path:C:\\My",
+            "Documents",
+        ]
 
     def test_or_and_negation_terms_pass_through(self):
         assert _split_query_terms("project1 | project2 !node_modules") == [
@@ -284,39 +291,48 @@ class TestSplitQueryTerms:
 
 class TestExtractPathFilter:
     def test_quoted_path_with_spaces(self):
-        clean, path = _extract_path_filter('es.exe path:"C:\\My Documents\\Project"')
-        assert path == r"C:\My Documents\Project"
+        clean, paths = _extract_path_filter('es.exe path:"C:\\My Documents\\Project"')
+        assert paths == [r"C:\My Documents\Project"]
         assert clean == "es.exe"
 
     def test_quoted_path_first_token(self):
-        clean, path = _extract_path_filter('path:"C:/My Docs" ext:py')
-        assert path == "C:/My Docs"
+        clean, paths = _extract_path_filter('path:"C:/My Docs" ext:py')
+        assert paths == ["C:/My Docs"]
         assert clean == "ext:py"
 
     def test_bare_path(self):
-        clean, path = _extract_path_filter(r"*.py path:C:\Projects")
-        assert path == r"C:\Projects"
+        clean, paths = _extract_path_filter(r"*.py path:C:\Projects")
+        assert paths == [r"C:\Projects"]
         assert clean == "*.py"
 
     def test_path_only_query(self):
-        clean, path = _extract_path_filter(r'path:"D:\My Files\a.txt"')
-        assert path == r"D:\My Files\a.txt"
+        clean, paths = _extract_path_filter(r'path:"D:\My Files\a.txt"')
+        assert paths == [r"D:\My Files\a.txt"]
         assert clean == ""
 
     def test_path_case_insensitive(self):
-        clean, path = _extract_path_filter('ext:log PATH:"E:\\logs"')
-        assert path == r"E:\logs"
+        clean, paths = _extract_path_filter('ext:log PATH:"E:\\logs"')
+        assert paths == [r"E:\logs"]
         assert clean == "ext:log"
 
     def test_no_path_clause(self):
-        clean, path = _extract_path_filter("*.py")
-        assert path == ""
+        clean, paths = _extract_path_filter("*.py")
+        assert paths == []
         assert clean == "*.py"
 
     def test_quoted_phrase_not_confused_with_path(self):
-        clean, path = _extract_path_filter('"exact name.txt"')
-        assert path == ""
+        clean, paths = _extract_path_filter('"exact name.txt"')
+        assert paths == []
         assert clean == '"exact name.txt"'
+
+    def test_multiple_path_clauses_not_extracted(self):
+        # es.exe accepts a single -path switch; multiple path: clauses stay
+        # in the query (native syntax) rather than being extracted.
+        clean, paths = _extract_path_filter(
+            r'es.exe path:"C:\A\B" path:"D:\X\Y"'
+        )
+        assert paths == []
+        assert clean == r'es.exe path:"C:\A\B" path:"D:\X\Y"'
 
 
 # ── SearchResult ──────────────────────────────────────────────────────────
@@ -404,10 +420,32 @@ class TestEverythingBackend:
             cmd = mock_run.call_args[0][0]
             assert "-case" in cmd
             assert "-w" in cmd
-            assert "-r" in cmd
+            assert "regex:test" in cmd  # regex via prefix, not -r
             assert "-p" in cmd
             assert "-viewport-offset" in cmd
             assert "50" in cmd
+
+    @pytest.mark.asyncio
+    async def test_search_regex_not_split(self, backend):
+        """match_regex=True keeps the query as one arg (no AND splitting)."""
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ("", "", 0)
+            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+                await backend.search("report 2026", match_regex=True)
+            cmd = mock_run.call_args[0][0]
+            assert "regex:report 2026" in cmd
+
+    @pytest.mark.asyncio
+    async def test_search_regex_prefix_kept(self, backend):
+        """regex: prefix in the query is not doubled."""
+        with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = ("", "", 0)
+            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+                await backend.search(r"regex:.*\.py$")
+            cmd = mock_run.call_args[0][0]
+            regex_args = [a for a in cmd if a.startswith("regex:")]
+            assert len(regex_args) == 1
+            assert regex_args[0] == r"regex:.*\.py$"
 
     @pytest.mark.asyncio
     async def test_search_error_raises(self, backend):

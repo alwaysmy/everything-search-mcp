@@ -50,17 +50,26 @@ regex:^test_.*\.py$           regex (or pass match_regex=true)
 - Locate a project someone mentioned: `everything_search(query="folder: myproject")`
 - Find a config file of unknown location: `everything_search(query="wg0.conf | wireguard ext:conf")`
 - Recently downloaded file: `everything_find_recent(period="1hour", path="C:\\Users\\<user>\\Downloads")`
-- Disk usage of build artifacts: `everything_count_stats(query="path:C:\\Projects node_modules folder:", include_size=true)`
+- Disk usage of build artifacts: `everything_count_stats(query="node_modules folder:", include_size=true, breakdown_by_extension=true)`
+- Total number of matches without listing: `everything_search(query="ext:py", max_results=1, include_total=true)`
 - Then inspect what you found: `everything_file_details(paths=[...], preview_lines=30)`
 
 ## Pitfalls
 
-- Paths with spaces must be quoted INSIDE the query: `path:"C:\My Documents"`.
+- **Prefer the `path` parameter over embedding `path:"..."` in the query.**
+  A `path:"..."` clause inside the query string is extracted and routed to the
+  es.exe `-path` switch, but paths containing spaces are safest passed via the
+  dedicated `path` argument.
+- `include_total` on `everything_search` adds one extra `-get-result-count`
+  call - leave it off when searching hot paths repeatedly.
+- The extension breakdown in `everything_count_stats` samples files; the
+  default `sample_sort` (`date-modified-desc`) is less biased than `name`,
+  which correlates with file extensions.
 - Results reflect the index, not content: `content:` search only works if the
   user enabled content indexing in Everything (rare) - to search inside files,
   find candidates by name first, then read them.
 - Everything must be running; if tools return connection errors, tell the user
   to start Everything (system tray). Do not suggest setting
   `EVERYTHING_INSTANCE` unless they configured a named instance.
-- Search is across ALL indexed drives by default - add `path:` to scope, and
+- Search is across ALL indexed drives by default - add `path` to scope, and
   prefer `max_results`/`offset` paging over huge listings.

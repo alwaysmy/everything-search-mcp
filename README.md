@@ -173,10 +173,12 @@ Everything MCP auto-detects your setup, but you can override:
 | Parameter | Default | Description |
 |---|---|---|
 | `query` | *(required)* | Everything search query |
+| `path` | `""` | Restrict to a directory (preferred over `path:` in the query) |
 | `max_results` | 50 | 1-500 |
 | `sort` | `date-modified-desc` | name, path, size, date-modified, date-created, extension (+ `-desc` variants) |
 | `match_case` / `match_whole_word` / `match_regex` / `match_path` | false | Match modifiers |
 | `offset` | 0 | Pagination offset |
+| `include_total` | false | Also report the total number of matches (`-get-result-count`) |
 
 **Query syntax:**
 
@@ -217,9 +219,11 @@ Returns full metadata; for directories, item count and listing; for text files w
 
 ### 5. `everything_count_stats` - quick analytics
 
-Parameters: `query` *(required)*, `include_size` (default true), `breakdown_by_extension`
+Parameters: `query` *(required)*, `include_size` (default true), `breakdown_by_extension`, `sample_sort` (default `date-modified-desc`)
 
 Count and size stats without listing every file - check scope before a big search.
+
+`sample_sort` controls how files are sampled for the extension breakdown. The default (`date-modified-desc`) is less biased than `name`, because file-name order correlates with file extensions.
 
 ---
 
@@ -232,6 +236,7 @@ Count and size stats without listing every file - check scope before a big searc
 | First 50 lines of a config file | `everything_file_details(paths=["C:\Projects\app\config.yaml"], preview_lines=50)` |
 | Duplicate filenames in Documents | `everything_search(query='dupe: path:"C:\Users\me\Documents"')` |
 | Images larger than 5MB | `everything_search(query="ext:jpg;png;gif size:>5mb")` |
+| How many .py files exist? | `everything_search(query="ext:py", max_results=1, include_total=true)` |
 
 ---
 

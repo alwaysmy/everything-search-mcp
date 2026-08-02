@@ -150,6 +150,13 @@ class SearchInput(BaseModel):
         default=False, description="Match against full path, not just filename"
     )
     offset: int = Field(default=0, description="Skip N results (pagination)", ge=0)
+    include_total: bool = Field(
+        default=False,
+        description=(
+            "Also report the total number of matches (uses -get-result-count). "
+            "Default false to keep searches fast."
+        ),
+    )
 
 
 @mcp.tool(
@@ -182,7 +189,17 @@ async def everything_search(params: SearchInput) -> str:
             offset=params.offset,
             path_filter=params.path,
         )
-        return _format_search_results(results, params.query, params.max_results, params.offset)
+        text = _format_search_results(
+            results, params.query, params.max_results, params.offset
+        )
+        if params.include_total:
+            try:
+                total = await backend.count(params.query, path_filter=params.path)
+                if total >= 0:
+                    text = f"{text}\nTotal matches: {total}"
+            except Exception:
+                pass  # count is best-effort; search results still valid
+        return text
     except Exception as exc:
         return f"Error: {exc}"
 

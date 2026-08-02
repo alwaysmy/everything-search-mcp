@@ -252,6 +252,38 @@ class TestToolSuccessPaths:
             server._backend = old_backend
             server._config = old_config
 
+    @pytest.mark.asyncio
+    async def test_search_include_total(self):
+        """include_total appends the overall match count to the result text."""
+        from everything_mcp import server
+        from everything_mcp.config import EverythingConfig
+        from everything_mcp.server import SearchInput, everything_search
+
+        class FakeBackend:
+            async def search(self, **kwargs):
+                return [SearchResult(path=r"C:\repo\a.py", name="a.py", size=1200)]
+
+            async def count(self, query: str, path_filter: str = "") -> int:
+                return 42
+
+        old_backend = server._backend
+        old_config = server._config
+        try:
+            server._backend = FakeBackend()
+            server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
+
+            result = await everything_search(
+                SearchInput(query="*.py", include_total=True)
+            )
+            assert "Total matches: 42" in result
+
+            # Without include_total there is no count line.
+            result2 = await everything_search(SearchInput(query="*.py"))
+            assert "Total matches" not in result2
+        finally:
+            server._backend = old_backend
+            server._config = old_config
+
 
 class TestToolErrorHandling:
     """Verify that tools return error strings rather than raising."""

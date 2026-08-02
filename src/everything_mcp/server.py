@@ -281,7 +281,7 @@ class FindRecentInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     period: str = Field(
-        default="1hour",
+        default="1day",
         description=(
             "How recent.  Options: "
             + ", ".join(

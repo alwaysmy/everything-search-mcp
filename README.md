@@ -210,7 +210,7 @@ Parameters: `file_type` *(required)*, `query`, `path`, `max_results`, `sort`
 
 Periods: `1min` … `12hours`, `today`, `yesterday`, `1day` … `1year`
 
-Parameters: `period` (default `1hour`), `path`, `extensions`, `query`, `max_results`
+Parameters: `period` (default `1day`), `path`, `extensions`, `query`, `max_results`
 
 ### 4. `everything_file_details` - deep inspection
 

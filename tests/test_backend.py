@@ -188,7 +188,7 @@ class TestBuildTypeQuery:
 class TestBuildRecentQuery:
     def test_default_period(self):
         q = build_recent_query()
-        assert "dm:last1hour" in q
+        assert "dm:last1day" in q
 
     def test_today(self):
         q = build_recent_query("today")

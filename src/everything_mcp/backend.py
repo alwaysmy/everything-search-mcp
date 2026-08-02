@@ -499,7 +499,7 @@ def build_type_query(file_type: str, additional_query: str = "") -> str:
 
 
 def build_recent_query(
-    period: str = "1hour",
+    period: str = "1day",
     extensions: str = "",
 ) -> str:
     """Build a search query for recently modified files.

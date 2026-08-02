@@ -164,9 +164,12 @@ class EverythingBackend:
         cmd = self._base_cmd()
 
         # Result count & offset
-        cmd.extend(["-n", str(min(max_results, self.config.max_results_cap))])
+        # es.exe: -n / -o are incompatible for pagination; the working pair is
+        # -viewport-count / -viewport-offset (offset must be given alongside
+        # viewport-count or es.exe ignores it).
+        cmd.extend(["-viewport-count", str(min(max_results, self.config.max_results_cap))])
         if offset > 0:
-            cmd.extend(["-o", str(offset)])
+            cmd.extend(["-viewport-offset", str(offset)])
 
         # Sort
         sort_value = SORT_MAP.get(sort, sort)

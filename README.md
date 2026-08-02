@@ -190,13 +190,14 @@ ext:py path:C:\Projects       Python files under a path
 size:>10mb                    larger than 10 MB
 size:1kb..1mb                 between 1 KB and 1 MB
 dm:today / dm:last1week       modified today / in the last week
-dc:2024                       created in 2024
+dc:2024                       created in 2024 (SLOW: creation time is not
+                              indexed by default; may time out - prefer dm:)
 "exact name.txt"              exact filename match
 project1 | project2           OR search
 !node_modules                 exclude a term
 content:TODO                  files containing TODO (needs content indexing)
 regex:^test_.*\.py$           regex search
-parent:src ext:py             files directly inside 'src' folders
+parent:C:\src ext:py          files directly inside 'src' folders (full path)
 dupe:  /  empty:               duplicate filenames / empty folders
 ```
 

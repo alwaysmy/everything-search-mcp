@@ -363,7 +363,7 @@ class TestEverythingBackend:
 
             cmd = mock_run.call_args[0][0]
             assert cmd[0] == backend.config.es_path
-            assert "-n" in cmd
+            assert "-viewport-count" in cmd
             assert "10" in cmd
             assert "-sort" in cmd
             assert "name" in cmd
@@ -405,7 +405,7 @@ class TestEverythingBackend:
             assert "-w" in cmd
             assert "-r" in cmd
             assert "-p" in cmd
-            assert "-o" in cmd
+            assert "-viewport-offset" in cmd
             assert "50" in cmd
 
     @pytest.mark.asyncio
@@ -424,7 +424,7 @@ class TestEverythingBackend:
             assert result == 42
             cmd = mock_run.call_args[0][0]
             assert "-get-result-count" in cmd
-            assert "-n" not in cmd
+            assert "-viewport-count" not in cmd
 
     @pytest.mark.asyncio
     async def test_search_multi_term_query_split_into_args(self, backend):
@@ -474,7 +474,7 @@ class TestEverythingBackend:
             assert result == 1048576
             cmd = mock_run.call_args[0][0]
             assert "-get-total-size" in cmd
-            assert "-n" not in cmd
+            assert "-viewport-count" not in cmd
 
     @pytest.mark.asyncio
     async def test_get_total_size_uint64_error_sentinel(self, backend):

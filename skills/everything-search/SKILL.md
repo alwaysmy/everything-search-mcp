@@ -34,7 +34,8 @@ ext:py;js;ts                  multiple extensions
 path:C:\Projects ext:py       restrict to a directory tree (or use the path argument)
 size:>10mb  size:1kb..1mb     size filters
 dm:today  dm:last1week        modified date
-dc:2024                       created date
+dc:2024                       created date (SLOW: creation time is not
+                              indexed by default; may time out - prefer dm:)
 "exact name.txt"              phrase with spaces (quote it)
 a | b                         OR
 !node_modules                 exclude

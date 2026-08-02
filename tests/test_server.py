@@ -122,6 +122,15 @@ class TestReadPreview:
         assert result is not None
         assert "caf" in result
 
+    def test_gb18030_fallback(self, tmp_path):
+        """Chinese GBK text (common on Chinese Windows) must decode, not mojibake."""
+        f = tmp_path / "chinese_gbk.txt"
+        f.write_bytes("中文测试文件内容\n".encode("gb18030"))
+        result = _read_preview(f, 1)
+        assert result is not None
+        assert "中文测试文件内容" in result
+        assert "\ufffd" not in result  # no replacement chars
+
     def test_nonexistent_file(self, tmp_path):
         f = tmp_path / "missing.txt"
         result = _read_preview(f, 10)

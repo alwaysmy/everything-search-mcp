@@ -301,7 +301,7 @@ async def everything_find_recent(params: FindRecentInput) -> str:
     try:
         backend = _get_backend()
 
-        query = build_recent_query(params.period, params.path, params.extensions)
+        query = build_recent_query(params.period, extensions=params.extensions)
         if params.query:
             query = f"{query} {params.query}"
 
@@ -309,6 +309,7 @@ async def everything_find_recent(params: FindRecentInput) -> str:
             query=query,
             max_results=params.max_results,
             sort="date-modified-desc",
+            path_filter=params.path,
         )
         return _format_search_results(results, f"recent ({params.period})", params.max_results)
     except Exception as exc:

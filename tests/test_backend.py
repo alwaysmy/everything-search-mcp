@@ -13,6 +13,7 @@ from everything_mcp.backend import (
     EverythingBackend,
     SearchResult,
     _decode_output,
+    _extract_path_filter,
     _looks_like_path,
     _parse_paths_and_stat,
     _split_query_terms,
@@ -150,8 +151,11 @@ class TestBuildTypeQuery:
         assert "py" in q
 
     def test_with_path(self):
+        # path is no longer embedded in the query string; it is routed to
+        # backend.search(path_filter=...) and passed via the -path switch.
         q = build_type_query("image", path_filter=r"C:\Photos")
-        assert 'path:"C:\\Photos"' in q
+        assert 'path:"C:\\Photos"' not in q
+        assert 'path:' not in q
         assert "jpg" in q
 
     def test_with_additional_query(self):
@@ -160,10 +164,12 @@ class TestBuildTypeQuery:
         assert "pdf" in q
 
     def test_with_all_params(self):
+        # path_filter is accepted for backward compatibility but ignored in
+        # the query string (routed to backend.search(path_filter=...)).
         q = build_type_query("audio", additional_query="jazz", path_filter=r"D:\Music")
         assert "mp3" in q
         assert "jazz" in q
-        assert 'path:"D:\\Music"' in q
+        assert 'path:"D:\\Music"' not in q
 
     def test_case_insensitive(self):
         q = build_type_query("CODE")
@@ -192,9 +198,11 @@ class TestBuildRecentQuery:
         assert "dm:today" in q
 
     def test_with_path(self):
+        # path is no longer embedded in the query string; it is routed to
+        # backend.search(path_filter=...) and passed via the -path switch.
         q = build_recent_query("1week", path_filter=r"C:\Projects")
         assert "dm:last1week" in q
-        assert 'path:"C:\\Projects"' in q
+        assert 'path:"C:\\Projects"' not in q
 
     def test_with_extensions_comma(self):
         q = build_recent_query("1hour", extensions="py,js,ts")
@@ -267,6 +275,46 @@ class TestSplitQueryTerms:
             "project2",
             "!node_modules",
         ]
+
+
+# ── _extract_path_filter ──────────────────────────────────────────────────
+
+
+class TestExtractPathFilter:
+    def test_quoted_path_with_spaces(self):
+        clean, path = _extract_path_filter('es.exe path:"C:\\My Documents\\Project"')
+        assert path == r"C:\My Documents\Project"
+        assert clean == "es.exe"
+
+    def test_quoted_path_first_token(self):
+        clean, path = _extract_path_filter('path:"C:/My Docs" ext:py')
+        assert path == "C:/My Docs"
+        assert clean == "ext:py"
+
+    def test_bare_path(self):
+        clean, path = _extract_path_filter(r"*.py path:C:\Projects")
+        assert path == r"C:\Projects"
+        assert clean == "*.py"
+
+    def test_path_only_query(self):
+        clean, path = _extract_path_filter(r'path:"D:\My Files\a.txt"')
+        assert path == r"D:\My Files\a.txt"
+        assert clean == ""
+
+    def test_path_case_insensitive(self):
+        clean, path = _extract_path_filter('ext:log PATH:"E:\\logs"')
+        assert path == r"E:\logs"
+        assert clean == "ext:log"
+
+    def test_no_path_clause(self):
+        clean, path = _extract_path_filter("*.py")
+        assert path == ""
+        assert clean == "*.py"
+
+    def test_quoted_phrase_not_confused_with_path(self):
+        clean, path = _extract_path_filter('"exact name.txt"')
+        assert path == ""
+        assert clean == '"exact name.txt"'
 
 
 # ── SearchResult ──────────────────────────────────────────────────────────
@@ -397,7 +445,11 @@ class TestEverythingBackend:
             assert result == 7
             cmd = mock_run.call_args[0][0]
             assert "ext:md" in cmd
-            assert "path:C:\\My Docs" in cmd
+            # path:"..." embedded in the query is extracted and passed via
+            # the -path switch so paths with spaces are not split.
+            assert "-path" in cmd
+            assert "C:/My Docs" in cmd
+            assert "path:C:\\My Docs" not in cmd
 
     @pytest.mark.asyncio
     async def test_count_uint64_error_sentinel(self, backend):

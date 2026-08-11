@@ -23,6 +23,19 @@ filename-based lookup outside the current project directory.
 Use `everything_count_stats` BEFORE listing when a query might match
 thousands of files - check the scope first, then narrow.
 
+## Calling the tools
+
+All five tools take their arguments inside a single `params` object - the
+MCP input schema for every tool is `{"params": {...}}`. For example:
+
+```json
+{"params": {"query": "*.py", "path": "C:\\Projects"}}
+```
+
+The `tool(args...)` shorthand used below is equivalent to that JSON; a client
+that reads the schema builds the `params` object automatically, and calls that
+omit it fail with `params Field required`.
+
 ## Query syntax essentials
 
 Space between terms = AND. Key operators:

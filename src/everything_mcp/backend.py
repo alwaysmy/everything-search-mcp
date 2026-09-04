@@ -610,7 +610,7 @@ def _extract_path_filter(query: str) -> tuple[str, list[str]]:
     if len(matches) == 1:
         m = matches[0]
         raw = m.group(1)
-        clean = (query[: m.start()] + " " + query[m.end():]).strip()
+        clean = (query[: m.start()] + " " + query[m.end() :]).strip()
         return clean, [raw.strip('"')]
     return query, []
 

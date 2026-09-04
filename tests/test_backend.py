@@ -328,9 +328,7 @@ class TestExtractPathFilter:
     def test_multiple_path_clauses_not_extracted(self):
         # es.exe accepts a single -path switch; multiple path: clauses stay
         # in the query (native syntax) rather than being extracted.
-        clean, paths = _extract_path_filter(
-            r'es.exe path:"C:\A\B" path:"D:\X\Y"'
-        )
+        clean, paths = _extract_path_filter(r'es.exe path:"C:\A\B" path:"D:\X\Y"')
         assert paths == []
         assert clean == r'es.exe path:"C:\A\B" path:"D:\X\Y"'
 

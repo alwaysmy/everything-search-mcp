@@ -2,6 +2,21 @@
 
 All notable changes to **everything-mcp** will be documented in this file.
 
+## [1.1.0] - 2026-09-04
+
+### Fixed
+
+- Compatibility with the `mcp` SDK 2.x, where `FastMCP` was renamed to `MCPServer`: the server now imports whichever class is available, so both `mcp>=2` and `mcp>=1.14` work.
+- Tool input schemas no longer disagree with call-time validation. Tools previously took a single pydantic-model parameter (`params: XxxInput`), which newer SDK versions publish as a nested `params` object while older ones advertised a flat schema - clients building arguments from the schema could fail with "params Field required" depending on the resolved SDK. All five tools now use flat parameters, so the published schema and the expected arguments are identical on every supported SDK version; the skill's `params` nesting note is dropped accordingly.
+- `everything_find_recent` now rejects unknown `period` values (e.g. `7days`) with a clear error before invoking es.exe. Previously an out-of-list period was passed through as raw syntax (`dm:7days`) and silently returned wrong results.
+- `everything_count_stats` description said the extension breakdown samples "top 200" results while the code samples up to 500; corrected.
+
+### Changed
+
+- `mcp` dependency constrained to `>=1.14.0,<3.0.0`.
+- Sort validation moved from pydantic `field_validator`s to `_validate_sort`, called at tool invocation; `sample_sort` shares the same validator.
+- Bundled skill documents a no-tool fallback (`es.exe` CLI) and the `EVERYTHING_ES_PATH` override for custom install locations.
+
 ## [1.0.6] - 2026-07-02
 
 ### Added

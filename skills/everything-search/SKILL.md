@@ -25,16 +25,15 @@ thousands of files - check the scope first, then narrow.
 
 ## Calling the tools
 
-All five tools take their arguments inside a single `params` object - the
-MCP input schema for every tool is `{"params": {...}}`. For example:
+All five tools take flat, named arguments that match their input schema
+exactly.  For example:
 
 ```json
-{"params": {"query": "*.py", "path": "C:\\Projects"}}
+{"query": "*.py", "path": "C:\\Projects"}
 ```
 
-The `tool(args...)` shorthand used below is equivalent to that JSON; a client
-that reads the schema builds the `params` object automatically, and calls that
-omit it fail with `params Field required`.
+The `tool(args...)` shorthand used below means one JSON argument per key;
+a client that reads the schema builds these automatically.
 
 ## Query syntax essentials
 
@@ -72,6 +71,13 @@ regex:^test_.*\.py$           regex (or pass match_regex=true)
 
 ## Pitfalls
 
+- The `everything_*` tools only exist when the Everything MCP server is
+  connected. If this session has no `everything_*` tools, fall back to running
+  the CLI directly (`es.exe -n 50 <query>`) if available, and offer to
+  configure the MCP server instead of guessing at tool calls.
+- `es.exe` ships with Everything 1.5a but NOT with stable 1.4. If the tools
+  report "es.exe not found" on a custom install location, set the
+  `EVERYTHING_ES_PATH` environment variable to the full es.exe path.
 - **Prefer the `path` parameter over embedding `path:"..."` in the query.**
   A `path:"..."` clause inside the query string is extracted and routed to the
   es.exe `-path` switch, but paths containing spaces are safest passed via the

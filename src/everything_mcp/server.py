@@ -6,6 +6,10 @@ using voidtools Everything's real-time NTFS index.
 
 Compatible with: Claude Code, Codex, Gemini, Kimi, Qwen, Cursor, Windsurf,
 and any MCP-compatible client using stdio transport.
+
+Works with the ``mcp`` SDK 2.x (``MCPServer``) and 1.14+ (``FastMCP``).
+Tool functions use flat parameters (not a single pydantic model) so the
+published schema matches how clients are validated on every SDK version.
 """
 
 from __future__ import annotations
@@ -18,9 +22,14 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+try:
+    from mcp.server.mcpserver import MCPServer  # mcp >= 2.0
+except ImportError:  # pragma: no cover - exercised only on mcp 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer  # mcp >= 1.14, < 2.0
+
+from pydantic import Field
 
 from everything_mcp.backend import (
     FILE_TYPES,
@@ -73,7 +82,14 @@ async def lifespan(server):
 
 # ── Server instance ───────────────────────────────────────────────────────
 
-mcp = FastMCP("everything_mcp", lifespan=lifespan)
+mcp = MCPServer("everything_mcp", lifespan=lifespan)
+
+
+def _validate_sort(sort: str, *, param: str = "sort") -> str:
+    """Return *sort* if valid, otherwise raise a clear ValueError."""
+    if sort not in SORT_MAP:
+        raise ValueError(f"Invalid {param} '{sort}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}")
+    return sort
 
 
 def _get_backend() -> EverythingBackend:
@@ -91,71 +107,19 @@ def _get_backend() -> EverythingBackend:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class SearchInput(BaseModel):
-    """Input schema for ``everything_search``."""
+def _validate_period(period: str) -> str:
+    """Return *period* if valid, otherwise raise a clear ValueError.
 
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    query: str = Field(
-        ...,
-        description=(
-            "Search query using Everything syntax. Examples: "
-            "'*.py' (all Python files), "
-            "'ext:py;js' (Python/JS files), "
-            "'size:>10mb ext:log' (large logs), "
-            "'dm:today ext:py' (Python files modified today), "
-            "'content:TODO ext:py' (files containing TODO - requires content indexing), "
-            "'\"exact phrase\"' (exact filename match), "
-            "'regex:test_\\d+\\.py$' (regex). "
-            "Combine with space (AND) or | (OR). Prefix ! to exclude. "
-            "For path restrictions, prefer the dedicated 'path' parameter."
-        ),
-        min_length=1,
-        max_length=2000,
-    )
-
-    path: str = Field(
-        default="",
-        description=(
-            "Restrict search to this directory. "
-            "Backslashes and spaces are handled automatically. "
-            "Prefer this over embedding 'path:' in the query string."
-        ),
-    )
-
-    max_results: int = Field(
-        default=50,
-        description="Maximum results to return (1-500)",
-        ge=1,
-        le=500,
-    )
-    sort: str = Field(
-        default="date-modified-desc",
-        description=("Sort order. Options: " + ", ".join(sorted(SORT_MAP.keys()))),
-    )
-
-    @field_validator("sort")
-    @classmethod
-    def validate_sort(cls, v: str) -> str:
-        if v not in SORT_MAP:
-            raise ValueError(
-                f"Invalid sort option '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}"
-            )
-        return v
-
-    match_case: bool = Field(default=False, description="Case-sensitive search")
-    match_whole_word: bool = Field(default=False, description="Match whole words only")
-    match_regex: bool = Field(default=False, description="Treat query as regex")
-    match_path: bool = Field(
-        default=False, description="Match against full path, not just filename"
-    )
-    offset: int = Field(default=0, description="Skip N results (pagination)", ge=0)
-    include_total: bool = Field(
-        default=False,
-        description=(
-            "Also report the total number of matches (uses -get-result-count). "
-            "Default false to keep searches fast."
-        ),
+    Raw Everything syntax (e.g. ``last2hours``) stays allowed via an explicit
+    allowlist prefix check rather than silently accepting typos like
+    ``7days`` that Everything would parse as garbage and return wrong (often
+    empty) results for.
+    """
+    if period in TIME_PERIODS or period.startswith("last"):
+        return period
+    valid = ", ".join(TIME_PERIODS.keys())
+    raise ValueError(
+        f"Invalid period '{period}'. Valid: {valid}, or raw Everything syntax like 'last2hours'."
     )
 
 
@@ -169,7 +133,67 @@ class SearchInput(BaseModel):
         "openWorldHint": False,
     },
 )
-async def everything_search(params: SearchInput) -> str:
+async def everything_search(
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Search query using Everything syntax. Examples: "
+                "'*.py' (all Python files), "
+                "'ext:py;js' (Python/JS files), "
+                "'size:>10mb ext:log' (large logs), "
+                "'dm:today ext:py' (Python files modified today), "
+                "'content:TODO ext:py' (files containing TODO - requires content indexing), "
+                "'\"exact phrase\"' (exact filename match), "
+                "'regex:test_\\d+\\.py$' (regex). "
+                "Combine with space (AND) or | (OR). Prefix ! to exclude. "
+                "For path restrictions, prefer the dedicated 'path' parameter."
+            ),
+            min_length=1,
+            max_length=2000,
+        ),
+    ],
+    path: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Restrict search to this directory. "
+                "Backslashes and spaces are handled automatically. "
+                "Prefer this over embedding 'path:' in the query string."
+            ),
+        ),
+    ] = "",
+    max_results: Annotated[
+        int, Field(default=50, description="Maximum results to return (1-500)", ge=1, le=500)
+    ] = 50,
+    sort: Annotated[
+        str,
+        Field(
+            default="date-modified-desc",
+            description="Sort order. Options: " + ", ".join(sorted(SORT_MAP.keys())),
+        ),
+    ] = "date-modified-desc",
+    match_case: Annotated[bool, Field(default=False, description="Case-sensitive search")] = False,
+    match_whole_word: Annotated[
+        bool, Field(default=False, description="Match whole words only")
+    ] = False,
+    match_regex: Annotated[bool, Field(default=False, description="Treat query as regex")] = False,
+    match_path: Annotated[
+        bool, Field(default=False, description="Match against full path, not just filename")
+    ] = False,
+    offset: Annotated[int, Field(default=0, description="Skip N results (pagination)", ge=0)] = 0,
+    include_total: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Also report the total number of matches (uses -get-result-count). "
+                "Default false to keep searches fast."
+            ),
+        ),
+    ] = False,
+) -> str:
     """Search for files and folders instantly using voidtools Everything.
 
     Leverages Everything's real-time NTFS index for sub-millisecond search
@@ -177,24 +201,23 @@ async def everything_search(params: SearchInput) -> str:
     filters, extension filters, path restrictions, and content search.
     """
     try:
+        _validate_sort(sort)
         backend = _get_backend()
         results = await backend.search(
-            query=params.query,
-            max_results=params.max_results,
-            sort=params.sort,
-            match_case=params.match_case,
-            match_whole_word=params.match_whole_word,
-            match_regex=params.match_regex,
-            match_path=params.match_path,
-            offset=params.offset,
-            path_filter=params.path,
+            query=query,
+            max_results=max_results,
+            sort=sort,
+            match_case=match_case,
+            match_whole_word=match_whole_word,
+            match_regex=match_regex,
+            match_path=match_path,
+            offset=offset,
+            path_filter=path,
         )
-        text = _format_search_results(
-            results, params.query, params.max_results, params.offset
-        )
-        if params.include_total:
+        text = _format_search_results(results, query, max_results, offset)
+        if include_total:
             try:
-                total = await backend.count(params.query, path_filter=params.path)
+                total = await backend.count(query, path_filter=path)
                 if total >= 0:
                     text = f"{text}\nTotal matches: {total}"
             except Exception:
@@ -209,36 +232,6 @@ async def everything_search(params: SearchInput) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class SearchByTypeInput(BaseModel):
-    """Input schema for ``everything_search_by_type``."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    file_type: str = Field(
-        ...,
-        description="File type category: " + ", ".join(sorted(FILE_TYPES.keys())),
-    )
-    query: str = Field(
-        default="",
-        description="Additional search filter (e.g. 'config' to narrow results)",
-    )
-    path: str = Field(
-        default="",
-        description="Restrict search to this directory (e.g. 'C:\\Projects')",
-    )
-    max_results: int = Field(default=50, ge=1, le=500)
-    sort: str = Field(default="date-modified-desc")
-
-    @field_validator("sort")
-    @classmethod
-    def validate_sort(cls, v: str) -> str:
-        if v not in SORT_MAP:
-            raise ValueError(
-                f"Invalid sort option '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}"
-            )
-        return v
-
-
 @mcp.tool(
     name="everything_search_by_type",
     annotations={
@@ -249,23 +242,44 @@ class SearchByTypeInput(BaseModel):
         "openWorldHint": False,
     },
 )
-async def everything_search_by_type(params: SearchByTypeInput) -> str:
+async def everything_search_by_type(
+    file_type: Annotated[
+        str,
+        Field(
+            description="File type category: " + ", ".join(sorted(FILE_TYPES.keys())),
+        ),
+    ],
+    query: Annotated[
+        str,
+        Field(default="", description="Additional search filter (e.g. 'config' to narrow results)"),
+    ] = "",
+    path: Annotated[
+        str,
+        Field(
+            default="",
+            description="Restrict search to this directory (e.g. 'C:\\Projects')",
+        ),
+    ] = "",
+    max_results: Annotated[int, Field(default=50, ge=1, le=500)] = 50,
+    sort: Annotated[str, Field(default="date-modified-desc")] = "date-modified-desc",
+) -> str:
     """Search for files by type category.
 
     Categories: audio, video, image, document, code, archive, executable,
     font, 3d, data.  Each maps to a curated list of file extensions.
     """
     try:
+        _validate_sort(sort)
         backend = _get_backend()
-        query = build_type_query(params.file_type, params.query)
+        built_query = build_type_query(file_type, query)
         results = await backend.search(
-            query=query,
-            max_results=params.max_results,
-            sort=params.sort,
-            path_filter=params.path,
+            query=built_query,
+            max_results=max_results,
+            sort=sort,
+            path_filter=path,
         )
-        label = f"type:{params.file_type}" + (f" {params.query}" if params.query else "")
-        return _format_search_results(results, label, params.max_results)
+        label = f"type:{file_type}" + (f" {query}" if query else "")
+        return _format_search_results(results, label, max_results)
     except Exception as exc:
         return f"Error: {exc}"
 
@@ -273,39 +287,6 @@ async def everything_search_by_type(params: SearchByTypeInput) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # Tool 3: everything_find_recent - What Changed?
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class FindRecentInput(BaseModel):
-    """Input schema for ``everything_find_recent``."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    period: str = Field(
-        default="1day",
-        description=(
-            "How recent.  Options: "
-            + ", ".join(
-                sorted(TIME_PERIODS.keys(), key=lambda k: list(TIME_PERIODS.keys()).index(k))
-            )
-            + ".  Or raw Everything syntax like 'last2hours'."
-        ),
-    )
-    path: str = Field(default="", description="Restrict to this directory path")
-    extensions: str = Field(
-        default="",
-        description="Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'",
-    )
-    query: str = Field(default="", description="Additional search filter")
-    max_results: int = Field(default=50, ge=1, le=500)
-    auto_expand: bool = Field(
-        default=True,
-        description=(
-            "When the time period yields fewer than max_results hits, retry "
-            "without the time restriction (all time).  Results still carry "
-            "date_modified so the AI can judge recency.  Set false to keep a "
-            "strict period."
-        ),
-    )
 
 
 @mcp.tool(
@@ -318,48 +299,85 @@ class FindRecentInput(BaseModel):
         "openWorldHint": False,
     },
 )
-async def everything_find_recent(params: FindRecentInput) -> str:
+async def everything_find_recent(
+    period: Annotated[
+        str,
+        Field(
+            default="1day",
+            description=(
+                "How recent.  Options: "
+                + ", ".join(
+                    sorted(TIME_PERIODS.keys(), key=lambda k: list(TIME_PERIODS.keys()).index(k))
+                )
+                + ".  Or raw Everything syntax like 'last2hours'."
+            ),
+        ),
+    ] = "1day",
+    path: Annotated[str, Field(default="", description="Restrict to this directory path")] = "",
+    extensions: Annotated[
+        str,
+        Field(
+            default="",
+            description="Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'",
+        ),
+    ] = "",
+    query: Annotated[str, Field(default="", description="Additional search filter")] = "",
+    max_results: Annotated[int, Field(default=50, ge=1, le=500)] = 50,
+    auto_expand: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "When the time period yields fewer than max_results hits, retry "
+                "without the time restriction (all time).  Results still carry "
+                "date_modified so the AI can judge recency.  Set false to keep a "
+                "strict period."
+            ),
+        ),
+    ] = True,
+) -> str:
     """Find files modified within a recent time period.
 
     Ideal for discovering what changed in a project, tracking recent
     downloads, finding today's log files, etc.  Sorted newest-first.
     """
     try:
+        _validate_period(period)
         backend = _get_backend()
 
-        query = build_recent_query(params.period, extensions=params.extensions)
-        if params.query:
-            query = f"{query} {params.query}"
+        built_query = build_recent_query(period, extensions=extensions)
+        if query:
+            built_query = f"{built_query} {query}"
 
         results = await backend.search(
-            query=query,
-            max_results=params.max_results,
+            query=built_query,
+            max_results=max_results,
             sort="date-modified-desc",
-            path_filter=params.path,
+            path_filter=path,
         )
 
         # Auto-expand: if the strict period returned fewer results than
         # requested, retry without the time restriction so the AI still gets
         # a useful set.  Results keep their date_modified metadata.
         expanded = False
-        if params.auto_expand and 0 < len(results) < params.max_results:
-            query_all = build_recent_query("", extensions=params.extensions)
-            if params.query:
-                query_all = f"{query_all} {params.query}"
+        if auto_expand and 0 < len(results) < max_results:
+            query_all = build_recent_query("", extensions=extensions)
+            if query:
+                query_all = f"{query_all} {query}"
             results_all = await backend.search(
                 query=query_all,
-                max_results=params.max_results,
+                max_results=max_results,
                 sort="date-modified-desc",
-                path_filter=params.path,
+                path_filter=path,
             )
             if len(results_all) > len(results):
                 results = results_all
                 expanded = True
 
-        label = f"recent ({params.period})"
+        label = f"recent ({period})"
         if expanded:
             label += " [auto-expanded to all time]"
-        return _format_search_results(results, label, params.max_results)
+        return _format_search_results(results, label, max_results)
     except Exception as exc:
         return f"Error: {exc}"
 
@@ -367,25 +385,6 @@ async def everything_find_recent(params: FindRecentInput) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # Tool 4: everything_file_details - Deep Inspection
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class FileDetailsInput(BaseModel):
-    """Input schema for ``everything_file_details``."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    paths: list[str] = Field(
-        ...,
-        description="File/folder paths to inspect (1-20)",
-        min_length=1,
-        max_length=20,
-    )
-    preview_lines: int = Field(
-        default=0,
-        description="Lines of text content to preview (0 = none, max 200)",
-        ge=0,
-        le=200,
-    )
 
 
 @mcp.tool(
@@ -398,7 +397,25 @@ class FileDetailsInput(BaseModel):
         "openWorldHint": False,
     },
 )
-async def everything_file_details(params: FileDetailsInput) -> str:
+async def everything_file_details(
+    paths: Annotated[
+        list[str],
+        Field(
+            description="File/folder paths to inspect (1-20)",
+            min_length=1,
+            max_length=20,
+        ),
+    ],
+    preview_lines: Annotated[
+        int,
+        Field(
+            default=0,
+            description="Lines of text content to preview (0 = none, max 200)",
+            ge=0,
+            le=200,
+        ),
+    ] = 0,
+) -> str:
     """Get detailed metadata and optional content preview for specific files.
 
     Returns: full path, size, dates, type, permissions, hidden status.
@@ -408,8 +425,8 @@ async def everything_file_details(params: FileDetailsInput) -> str:
     # Run blocking file I/O in thread pool to not block the event loop
     return await asyncio.to_thread(
         _get_file_details_sync,
-        params.paths,
-        params.preview_lines,
+        paths,
+        preview_lines,
     )
 
 
@@ -495,55 +512,6 @@ def _get_file_details_sync(paths: list[str], preview_lines: int) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class CountStatsInput(BaseModel):
-    """Input schema for ``everything_count_stats``."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    query: str = Field(
-        ...,
-        description=(
-            "Search query to count/measure.  Same syntax as everything_search. "
-            "Examples: 'ext:py', 'ext:log size:>1mb', '*.tmp'"
-        ),
-        min_length=1,
-        max_length=2000,
-    )
-    path: str = Field(
-        default="",
-        description=(
-            "Restrict counting to this directory. "
-            "Prefer this over embedding 'path:' in the query string."
-        ),
-    )
-    include_size: bool = Field(
-        default=True,
-        description="Also calculate total size of all matching files",
-    )
-    breakdown_by_extension: bool = Field(
-        default=False,
-        description="Break down count and size by file extension (samples top 200 results)",
-    )
-    sample_sort: str = Field(
-        default="date-modified-desc",
-        description=(
-            "Sort order used when sampling files for the extension breakdown. "
-            "Default is date-modified-desc: file-name sort (name/name-desc) is "
-            "correlated with extensions and biases the sample; date/other keys "
-            "give a more representative mix."
-        ),
-    )
-
-    @field_validator("sample_sort")
-    @classmethod
-    def validate_sample_sort(cls, v: str) -> str:
-        if v not in SORT_MAP:
-            raise ValueError(
-                f"Invalid sample_sort '{v}'. Valid: {', '.join(sorted(SORT_MAP.keys()))}"
-            )
-        return v
-
-
 @mcp.tool(
     name="everything_count_stats",
     annotations={
@@ -554,21 +522,70 @@ class CountStatsInput(BaseModel):
         "openWorldHint": False,
     },
 )
-async def everything_count_stats(params: CountStatsInput) -> str:
+async def everything_count_stats(
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Search query to count/measure.  Same syntax as everything_search. "
+                "Examples: 'ext:py', 'ext:log size:>1mb', '*.tmp'"
+            ),
+            min_length=1,
+            max_length=2000,
+        ),
+    ],
+    path: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Restrict counting to this directory. "
+                "Prefer this over embedding 'path:' in the query string."
+            ),
+        ),
+    ] = "",
+    include_size: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="Also calculate total size of all matching files",
+        ),
+    ] = True,
+    breakdown_by_extension: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Break down count and size by file extension (samples up to 500 results)",
+        ),
+    ] = False,
+    sample_sort: Annotated[
+        str,
+        Field(
+            default="date-modified-desc",
+            description=(
+                "Sort order used when sampling files for the extension breakdown. "
+                "Default is date-modified-desc: file-name sort (name/name-desc) is "
+                "correlated with extensions and biases the sample; date/other keys "
+                "give a more representative mix."
+            ),
+        ),
+    ] = "date-modified-desc",
+) -> str:
     """Get count and size statistics for files matching a query.
 
     Fast way to understand the scope of a query without listing every file.
     Optionally breaks down by extension for a high-level overview.
     """
     try:
+        _validate_sort(sample_sort, param="sample_sort")
         backend = _get_backend()
-        output: dict = {"query": params.query}
-        if params.path:
-            output["path"] = params.path
+        output: dict = {"query": query}
+        if path:
+            output["path"] = path
 
         # Count
         try:
-            total_count = await backend.count(params.query, path_filter=params.path)
+            total_count = await backend.count(query, path_filter=path)
             if total_count >= 0:
                 output["total_count"] = total_count
             else:
@@ -579,11 +596,9 @@ async def everything_count_stats(params: CountStatsInput) -> str:
             output["count_note"] = "Count not available (es.exe may not support -get-result-count)"
 
         # Total size
-        if params.include_size:
+        if include_size:
             try:
-                total_size = await backend.get_total_size(
-                    params.query, path_filter=params.path
-                )
+                total_size = await backend.get_total_size(query, path_filter=path)
                 if total_size >= 0:
                     output["total_size"] = total_size
                     output["total_size_human"] = human_size(total_size)
@@ -593,14 +608,14 @@ async def everything_count_stats(params: CountStatsInput) -> str:
                 output["size_note"] = "Total size not available"
 
         # Extension breakdown
-        if params.breakdown_by_extension:
+        if breakdown_by_extension:
             try:
                 sample_limit = 500
                 results = await backend.search(
-                    params.query,
+                    query,
                     max_results=sample_limit,
-                    sort=params.sample_sort,
-                    path_filter=params.path,
+                    sort=sample_sort,
+                    path_filter=path,
                 )
                 ext_stats: dict[str, dict] = {}
                 sampled_files = 0
@@ -625,7 +640,7 @@ async def everything_count_stats(params: CountStatsInput) -> str:
                 output["extension_breakdown"] = breakdown
                 output["breakdown_note"] = (
                     f"Based on {sampled_files} sampled files from first {len(results)} "
-                    f"results (max sample {sample_limit}, sorted by {params.sample_sort}); "
+                    f"results (max sample {sample_limit}, sorted by {sample_sort}); "
                     f"directories excluded."
                 )
             except Exception as exc:

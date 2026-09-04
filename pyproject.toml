@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "everything-mcp"
-version = "1.0.6"
+version = "1.1.0"
 description = "The definitive MCP server for voidtools Everything - lightning-fast file search for AI agents"
 readme = "README.md"
 license = { text = "MIT" }
@@ -31,7 +31,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.14.0,<3.0.0",
     "pydantic>=2.0.0",
 ]
 

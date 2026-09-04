@@ -226,33 +226,58 @@ class TestTextSets:
             assert ext in _TEXT_EXTENSIONS, f"Missing modern extension: {ext}"
 
 
-# ── Sort validation ────────────────────────────────────────────────────────
+# ── Sort/period validation ───────────────────────────────────────────────
 
 
 class TestSortValidation:
     """Test that invalid sort options are rejected."""
 
     def test_valid_sort_accepted(self):
-        from everything_mcp.server import SearchInput
+        from everything_mcp.server import _validate_sort
 
-        params = SearchInput(query="*.py", sort="date-modified-desc")
-        assert params.sort == "date-modified-desc"
+        assert _validate_sort("date-modified-desc") == "date-modified-desc"
 
     def test_invalid_sort_rejected(self):
-        from pydantic import ValidationError
+        from everything_mcp.server import _validate_sort
 
-        from everything_mcp.server import SearchInput
-
-        with pytest.raises(ValidationError, match="Invalid sort option"):
-            SearchInput(query="*.py", sort="invalid-sort")
+        with pytest.raises(ValueError, match="Invalid sort"):
+            _validate_sort("invalid-sort")
 
     def test_all_sort_options_valid(self):
         from everything_mcp.backend import SORT_MAP
-        from everything_mcp.server import SearchInput
+        from everything_mcp.server import _validate_sort
 
         for sort_key in SORT_MAP:
-            params = SearchInput(query="test", sort=sort_key)
-            assert params.sort == sort_key
+            assert _validate_sort(sort_key) == sort_key
+
+    def test_custom_param_name_in_error(self):
+        from everything_mcp.server import _validate_sort
+
+        with pytest.raises(ValueError, match="Invalid sample_sort"):
+            _validate_sort("bogus", param="sample_sort")
+
+
+class TestPeriodValidation:
+    """Test that find_recent periods are validated before hitting es.exe."""
+
+    def test_known_periods_accepted(self):
+        from everything_mcp.backend import TIME_PERIODS
+        from everything_mcp.server import _validate_period
+
+        for period in TIME_PERIODS:
+            assert _validate_period(period) == period
+
+    def test_raw_everything_syntax_accepted(self):
+        from everything_mcp.server import _validate_period
+
+        assert _validate_period("last2hours") == "last2hours"
+
+    def test_typo_rejected(self):
+        """'7days' previously slipped through and silently returned garbage."""
+        from everything_mcp.server import _validate_period
+
+        with pytest.raises(ValueError, match="Invalid period"):
+            _validate_period("7days")
 
 
 # ── Tool error handling ───────────────────────────────────────────────────
@@ -290,7 +315,7 @@ class TestToolSuccessPaths:
     async def test_count_stats_breakdown_excludes_directories(self):
         from everything_mcp import server
         from everything_mcp.config import EverythingConfig
-        from everything_mcp.server import CountStatsInput, everything_count_stats
+        from everything_mcp.server import everything_count_stats
 
         class FakeBackend:
             seen_paths: list[str] = []
@@ -318,7 +343,7 @@ class TestToolSuccessPaths:
             server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
 
             result = await everything_count_stats(
-                CountStatsInput(query="ext:py", breakdown_by_extension=True, path=r"C:\repo")
+                query="ext:py", breakdown_by_extension=True, path=r"C:\repo"
             )
             data = json.loads(result)
 
@@ -339,7 +364,7 @@ class TestToolSuccessPaths:
         """sample_sort controls the order used when sampling the breakdown."""
         from everything_mcp import server
         from everything_mcp.config import EverythingConfig
-        from everything_mcp.server import CountStatsInput, everything_count_stats
+        from everything_mcp.server import everything_count_stats
 
         seen_sorts: list[str] = []
 
@@ -350,9 +375,7 @@ class TestToolSuccessPaths:
             async def get_total_size(self, query: str, path_filter: str = "") -> int:
                 return 100
 
-            async def search(
-                self, query: str, max_results: int, sort: str, path_filter: str = ""
-            ):
+            async def search(self, query: str, max_results: int, sort: str, path_filter: str = ""):
                 seen_sorts.append(sort)
                 return [SearchResult(path=r"C:\repo\a.py", name="a.py", size=100)]
 
@@ -363,21 +386,34 @@ class TestToolSuccessPaths:
             server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
 
             # Default should be date-modified-desc (unbiased sampling).
-            await everything_count_stats(
-                CountStatsInput(query="*.py", breakdown_by_extension=True)
-            )
+            await everything_count_stats(query="*.py", breakdown_by_extension=True)
             assert seen_sorts == ["date-modified-desc"]
 
             # Custom sort is honoured.
             seen_sorts.clear()
             await everything_count_stats(
-                CountStatsInput(query="*.py", breakdown_by_extension=True, sample_sort="size")
+                query="*.py", breakdown_by_extension=True, sample_sort="size"
             )
             assert seen_sorts == ["size"]
+        finally:
+            server._backend = old_backend
+            server._config = old_config
 
-            # Invalid sort is rejected by the validator.
-            with pytest.raises(ValueError, match="Invalid sample_sort"):
-                CountStatsInput(query="*.py", sample_sort="bogus")
+    @pytest.mark.asyncio
+    async def test_count_stats_invalid_sample_sort(self):
+        """Invalid sample_sort surfaces as an error string, not a crash."""
+        from everything_mcp import server
+        from everything_mcp.config import EverythingConfig
+        from everything_mcp.server import everything_count_stats
+
+        old_backend = server._backend
+        old_config = server._config
+        try:
+            server._backend = None
+            server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
+
+            result = await everything_count_stats(query="*.py", sample_sort="bogus")
+            assert "Invalid sample_sort" in result
         finally:
             server._backend = old_backend
             server._config = old_config
@@ -387,7 +423,7 @@ class TestToolSuccessPaths:
         """include_total appends the overall match count to the result text."""
         from everything_mcp import server
         from everything_mcp.config import EverythingConfig
-        from everything_mcp.server import SearchInput, everything_search
+        from everything_mcp.server import everything_search
 
         class FakeBackend:
             async def search(self, **kwargs):
@@ -402,13 +438,11 @@ class TestToolSuccessPaths:
             server._backend = FakeBackend()
             server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
 
-            result = await everything_search(
-                SearchInput(query="*.py", include_total=True)
-            )
+            result = await everything_search(query="*.py", include_total=True)
             assert "Total matches: 42" in result
 
             # Without include_total there is no count line.
-            result2 = await everything_search(SearchInput(query="*.py"))
+            result2 = await everything_search(query="*.py")
             assert "Total matches" not in result2
         finally:
             server._backend = old_backend
@@ -419,7 +453,7 @@ class TestToolSuccessPaths:
         """Few results in the period trigger an all-time retry (default on)."""
         from everything_mcp import server
         from everything_mcp.config import EverythingConfig
-        from everything_mcp.server import FindRecentInput, everything_find_recent
+        from everything_mcp.server import everything_find_recent
 
         queries_seen: list[str] = []
 
@@ -445,21 +479,44 @@ class TestToolSuccessPaths:
             server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
 
             # auto_expand on (default): retries without dm:, label notes it
-            result = await everything_find_recent(
-                FindRecentInput(period="1day", max_results=5)
-            )
+            result = await everything_find_recent(period="1day", max_results=5)
             assert "auto-expanded" in result
             assert "3 results" in result
             assert queries_seen == ["dm:last1day", ""] or queries_seen[-1] == ""
 
             # auto_expand off: no retry, label is plain
             queries_seen.clear()
-            result2 = await everything_find_recent(
-                FindRecentInput(period="1day", max_results=5, auto_expand=False)
-            )
+            result2 = await everything_find_recent(period="1day", max_results=5, auto_expand=False)
             assert "auto-expanded" not in result2
             assert len(queries_seen) == 1
             assert queries_seen[0] == "dm:last1day"
+        finally:
+            server._backend = old_backend
+            server._config = old_config
+
+    @pytest.mark.asyncio
+    async def test_find_recent_invalid_period(self):
+        """Invalid period returns an error string instead of a silent miss."""
+        from everything_mcp import server
+        from everything_mcp.config import EverythingConfig
+        from everything_mcp.server import everything_find_recent
+
+        calls: list = []
+
+        class FakeBackend:
+            async def search(self, *args, **kwargs):
+                calls.append((args, kwargs))
+                return []
+
+        old_backend = server._backend
+        old_config = server._config
+        try:
+            server._backend = FakeBackend()
+            server._config = EverythingConfig(es_path=r"C:\Program Files\Everything\es.exe")
+
+            result = await everything_find_recent(period="7days")
+            assert "Invalid period" in result
+            assert calls == []  # es.exe was never invoked
         finally:
             server._backend = old_backend
             server._config = old_config
@@ -480,10 +537,9 @@ class TestToolErrorHandling:
             server._backend = None
             server._config = None
 
-            from everything_mcp.server import SearchInput, everything_search
+            from everything_mcp.server import everything_search
 
-            params = SearchInput(query="*.py")
-            result = await everything_search(params)
+            result = await everything_search(query="*.py")
             assert isinstance(result, str)
             assert "Error" in result
         finally:
@@ -500,10 +556,9 @@ class TestToolErrorHandling:
             server._backend = None
             server._config = None
 
-            from everything_mcp.server import CountStatsInput, everything_count_stats
+            from everything_mcp.server import everything_count_stats
 
-            params = CountStatsInput(query="*.py")
-            result = await everything_count_stats(params)
+            result = await everything_count_stats(query="*.py")
             assert isinstance(result, str)
             assert "Error" in result
         finally:

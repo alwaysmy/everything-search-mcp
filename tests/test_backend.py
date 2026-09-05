@@ -97,6 +97,15 @@ class TestDecodeOutput:
     def test_empty(self):
         assert _decode_output(b"") == ""
 
+    def test_gbk_fallback(self):
+        """es.exe on Chinese Windows outputs GBK filenames; must not mojibake."""
+        path = r"C:\模板\婚后财产协议.docx"
+        assert _decode_output(path.encode("gbk")) == path
+
+    def test_gbk_mixed_ascii_and_chinese(self):
+        data = rb"C:\Users\dell\.workbuddy\templates" + b"\\" + "测试模板.docx".encode("gbk")
+        assert _decode_output(data) == r"C:\Users\dell\.workbuddy\templates\测试模板.docx"
+
 
 # ── _parse_paths_and_stat ─────────────────────────────────────────────────
 
@@ -574,7 +583,7 @@ class TestEverythingBackend:
 
     def test_decode_output_utf8_fallback(self):
         # valid utf-8 passes through
-        assert _decode_output("中文".encode("utf-8")) == "中文"
+        assert _decode_output("中文".encode()) == "中文"
 
     def test_looks_like_path_more_cases(self):
         assert _looks_like_path("C:\\") is True  # drive root

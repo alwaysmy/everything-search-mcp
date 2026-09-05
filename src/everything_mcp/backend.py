@@ -630,15 +630,24 @@ def human_size(size: int) -> str:
 
 
 def _decode_output(data: bytes) -> str:
-    """Decode subprocess output, trying UTF-8 first then system encoding."""
+    """Decode subprocess output, trying UTF-8 first then the ANSI code page.
+
+    es.exe writes filenames using the Windows ANSI code page (e.g. GBK on
+    Chinese systems), while the server may run in UTF-8 mode where
+    ``locale.getpreferredencoding`` reports utf-8 and never hits the ANSI
+    codec - hence the explicit ``mbcs`` fallback before the lossy attempt.
+    """
     if data.startswith(b"\xef\xbb\xbf"):
         return data[3:].decode("utf-8", errors="replace")
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         pass
-    encoding = locale.getpreferredencoding(False)
-    try:
-        return data.decode(encoding)
-    except (UnicodeDecodeError, LookupError):
-        return data.decode("utf-8", errors="replace")
+    for encoding in (locale.getpreferredencoding(False), "mbcs"):
+        if not encoding or encoding.lower().replace("-", "") in ("utf8", "utf8mb4"):
+            continue
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")

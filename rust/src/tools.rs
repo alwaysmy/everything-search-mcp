@@ -89,6 +89,8 @@ fn results_output_schema() -> Value {
             "query": {"type": "string", "description": "the query as requested"},
             "effective_query": {"type": "string",
                 "description": "the Everything expression actually executed, after path/category/entry_type/period expansion"},
+            "probes": {"type": "array", "items": {"type": "string"},
+                "description": "extra queries executed by multi-probe; empty when probe was not requested"},
             "total": {"type": "integer", "description": "matching objects in the index"},
             "total_accuracy": {"type": "string", "enum": ["exact"]},
             "returned": {"type": "integer"},
@@ -193,6 +195,36 @@ fn stats_output_schema() -> Value {
     })
 }
 
+fn batch_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "queries_requested": {"type": "integer"},
+            "queries_executed": {"type": "array", "items": {"type": "string"}},
+            "total_returned": {"type": "integer"},
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "effective_query": {"type": "string"},
+                        "total": {"type": "integer"},
+                        "returned": {"type": "integer"},
+                        "results": {"type": "array", "items": item_schema()},
+                        "error": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "elapsed_ms": {"type": "number"}
+        },
+        "required": ["queries_requested", "queries_executed", "total_returned",
+                     "results", "elapsed_ms"],
+        "additionalProperties": false
+    })
+}
+
 fn tool(name: &str, description: &str, input: Value, output: Value) -> Value {
     json!({
         "name": name,
@@ -288,6 +320,7 @@ impl Handler for Tools {
                 "match_regex": p_bool("Treat query as a regular expression", false),
                 "match_path": p_bool("Match the query against the full path instead of the filename", false),
                 "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),
+                "probe": p_bool("Multi-probe: when a single bare term returns few hits, also look for it in the path and among folders (useful when the thing you are naming is really a directory). Every extra query executed is reported in `probes`.", false),
                 "include_total": p_bool("Also report the total match count (it is already exact and costs nothing, so this only controls whether the text form mentions it).", false),
             }),
             &["query"],
@@ -345,6 +378,22 @@ impl Handler for Tools {
             tool("everything_count_stats",
                  "Count and measure files matching a query without listing them. The count is exact; size and per-extension figures are sampled and labelled as such.",
                  stats_schema, stats_output_schema()),
+            tool("everything_search_batch",
+                 "Run up to 8 searches in one call and get all the answers back together. Use it when several independent lookups are needed at once (does this project have a Cargo.toml / package.json / pyproject.toml?), to avoid paying an agent round trip per lookup. Each entry takes the same arguments as everything_search.",
+                 schema(
+                     json!({
+                         "queries": json!({
+                             "type": "array",
+                             "description": "1-8 search argument objects; each accepts the everything_search arguments.",
+                             "minItems": 1,
+                             "maxItems": 8,
+                             "items": {"type": "object"}
+                         }),
+                         "max_total_results": p_int("Stop early once this many results have been returned across all queries.", 200, 1, 2000),
+                     }),
+                     &["queries"],
+                 ),
+                 batch_output_schema()),
         ]})
     }
 
@@ -354,9 +403,10 @@ impl Handler for Tools {
             "everything_find_recent" => self.find_recent(args),
             "everything_file_details" => self.file_details(args),
             "everything_count_stats" => self.count_stats(args),
+            "everything_search_batch" => self.batch(args),
             other => Err(format!(
                 "unknown tool: {other}. Available: everything_search, everything_find_recent, \
-                 everything_file_details, everything_count_stats"
+                 everything_file_details, everything_count_stats, everything_search_batch"
             )),
         }
     }
@@ -502,8 +552,46 @@ impl Tools {
             path: None, // already compiled into the expression as the path: function
         })?;
 
-        let total = resp.total_results;
-        let all: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
+        let total_primary = resp.total_results;
+        let mut probes: Vec<String> = Vec::new();
+        let mut all: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
+
+        // Optional multi-probe. A bare term usually names a file, but agents often
+        // mean "the thing called X" when X is really a directory (a project folder).
+        // When the primary result set is thin, look for the term in the path and
+        // among folders too. Opt-in, and every extra query is reported back, so the
+        // widening is never silent.
+        let bare_term = !query.trim().is_empty()
+            && !query.contains(' ')
+            && !query.contains(':')
+            && !query.contains('*')
+            && !query.contains('?')
+            && !regex;
+        if b(args, "probe", false) && bare_term && all.len() < max {
+            for variant in [format!("path:{}", query.trim()), format!("folder: {}", query.trim())] {
+                if let Ok(r2) = self.client.query(&Query {
+                    search: &variant,
+                    count: max,
+                    offset: 0,
+                    sort: &sort,
+                    ascending: !sort.ends_with("-desc"),
+                    case: false,
+                    whole_word: false,
+                    regex: false,
+                    match_path: false,
+                    path: None,
+                }) {
+                    probes.push(variant);
+                    for it in r2.results.into_iter().map(Item::from) {
+                        all.push(it);
+                    }
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            all.retain(|i| seen.insert(i.full_path().to_lowercase()));
+        }
+        let total = total_primary.max(all.len() as u64);
+
         let diversified = max_per_parent > 0;
         let mut items = diversify(all, max_per_parent);
         items.truncate(max);
@@ -527,9 +615,13 @@ impl Tools {
             text.push_str(&format!("Total matches: {total} (exact)\n"));
         }
 
+        if !probes.is_empty() {
+            text.push_str(&format!("extra probes executed: {}\n", probes.join("  |  ")));
+        }
         let structured = json!({
             "query": query,
             "effective_query": effective,
+            "probes": probes,
             "total": total,
             "total_accuracy": "exact",
             "returned": items.len(),
@@ -836,6 +928,73 @@ impl Tools {
             structured["sampled"] = json!(items.len());
         }
 
+        Ok(ToolOutput::new(text, structured))
+    }
+
+    /// Several independent searches in one call. The win is agent round trips, not
+    /// server time: one search costs about a millisecond, one agent turn costs
+    /// seconds.
+    fn batch(&mut self, args: &Value) -> Result<ToolOutput, String> {
+        let started = Instant::now();
+        let queries = args
+            .get("queries")
+            .and_then(|v| v.as_array())
+            .ok_or("queries is required (array of everything_search argument objects)")?;
+        if queries.is_empty() || queries.len() > 8 {
+            return Err("queries must contain 1-8 entries".into());
+        }
+        let max_total = u(args, "max_total_results", 200).clamp(1, 2000);
+
+        let mut text = String::new();
+        let mut per_query: Vec<Value> = Vec::new();
+        let mut executed: Vec<Value> = Vec::new();
+        let mut total_returned = 0usize;
+
+        for (i, q) in queries.iter().enumerate() {
+            match self.search(q) {
+                Ok(out) => {
+                    let sc = out.structured;
+                    let n = sc["returned"].as_u64().unwrap_or(0) as usize;
+                    total_returned += n;
+                    executed.push(sc["effective_query"].clone());
+                    text.push_str(&format!(
+                        "===== query {} of {} : {} hit(s) of {} matching\n",
+                        i + 1,
+                        queries.len(),
+                        n,
+                        sc["total"]
+                    ));
+                    text.push_str(&out.text);
+                    text.push('\n');
+                    per_query.push(json!({
+                        "query": sc["query"],
+                        "effective_query": sc["effective_query"],
+                        "total": sc["total"],
+                        "returned": sc["returned"],
+                        "results": sc["results"],
+                    }));
+                }
+                Err(e) => {
+                    text.push_str(&format!("===== query {} : error: {e}\n", i + 1));
+                    per_query.push(json!({"query": q.get("query").cloned().unwrap_or(json!("")),
+                                          "error": e}));
+                }
+            }
+            if total_returned >= max_total {
+                text.push_str(&format!(
+                    "\nstopped early: {total_returned} results reached max_total_results={max_total}\n"
+                ));
+                break;
+            }
+        }
+
+        let structured = json!({
+            "queries_requested": queries.len(),
+            "queries_executed": executed,
+            "total_returned": total_returned,
+            "results": per_query,
+            "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+        });
         Ok(ToolOutput::new(text, structured))
     }
 }

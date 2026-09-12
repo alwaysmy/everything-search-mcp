@@ -11,6 +11,7 @@ mod cli;
 mod everything;
 mod filetype;
 mod jsonrpc;
+mod setup;
 mod tools;
 
 fn main() {

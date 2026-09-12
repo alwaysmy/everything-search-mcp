@@ -177,10 +177,19 @@ impl From<RawResult> for Item {
     }
 }
 
-/// Everything reports mtime as a Windows FILETIME (100 ns ticks since 1601-01-01).
+/// Everything reports mtime as a Windows FILETIME - 100 ns ticks since
+/// 1601-01-01 **UTC**. Everything's own UI shows local time and so does Explorer,
+/// so the value is shifted into local time here; reported raw it was 8 hours off
+/// on a UTC+8 machine, which is exactly the kind of error a "what changed
+/// recently" answer must not have.
 pub fn format_filetime(raw: &str) -> Option<String> {
     let ticks: u64 = raw.parse().ok()?;
     let unix = (ticks / 10_000_000) as i64 - 11_644_473_600;
+    Some(format_unix(unix + local_offset_minutes() * 60))
+}
+
+/// Unix seconds to `YYYY-MM-DD HH:MM:SS`, with no timezone applied.
+pub fn format_unix(unix: i64) -> String {
     let days = unix.div_euclid(86_400);
     let secs = unix.rem_euclid(86_400);
     // civil_from_days (Howard Hinnant's algorithm)
@@ -194,7 +203,7 @@ pub fn format_filetime(raw: &str) -> Option<String> {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    Some(format!(
+    format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         y,
         m,
@@ -202,7 +211,61 @@ pub fn format_filetime(raw: &str) -> Option<String> {
         secs / 3600,
         (secs % 3600) / 60,
         secs % 60
-    ))
+    )
+}
+
+/// Minutes to add to UTC to get local time, daylight saving included.
+///
+/// This is the crate's only `unsafe`: a single `GetTimeZoneInformation` call.
+/// The alternatives were a date/time crate (a whole dependency tree for one
+/// integer) or reading the registry from Rust (not possible without one either).
+#[cfg(windows)]
+pub fn local_offset_minutes() -> i64 {
+    #[repr(C)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    /// `TIME_ZONE_INFORMATION`: i32 / [u16;32] / SYSTEMTIME / i32 / [u16;32] /
+    /// SYSTEMTIME / i32, which is what `#[repr(C)]` lays out here.
+    #[repr(C)]
+    struct TimeZoneInformation {
+        bias: i32,
+        standard_name: [u16; 32],
+        standard_date: SystemTime,
+        standard_bias: i32,
+        daylight_name: [u16; 32],
+        daylight_date: SystemTime,
+        daylight_bias: i32,
+    }
+    unsafe extern "system" {
+        fn GetTimeZoneInformation(tzi: *mut TimeZoneInformation) -> u32;
+    }
+    const TIME_ZONE_ID_DAYLIGHT: u32 = 3;
+    // SAFETY: the struct mirrors the documented Win32 layout, so the call writes
+    // nothing outside this local; every field is a plain integer array.
+    let bias = unsafe {
+        let mut tzi = std::mem::zeroed::<TimeZoneInformation>();
+        let id = GetTimeZoneInformation(&mut tzi);
+        if id == TIME_ZONE_ID_DAYLIGHT {
+            tzi.bias + tzi.daylight_bias
+        } else {
+            tzi.bias + tzi.standard_bias
+        }
+    };
+    // `Bias` counts minutes *west* of UTC.
+    -(bias as i64)
+}
+
+#[cfg(not(windows))]
+pub fn local_offset_minutes() -> i64 {
+    0
 }
 
 pub fn human_size(bytes: u64) -> String {
@@ -408,4 +471,35 @@ fn encode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_epoch_formats_as_utc() {
+        assert_eq!(format_unix(0), "1970-01-01 00:00:00");
+        // 2026-09-12T08:40:37Z, the instant a real prefetch file was written
+        assert_eq!(format_unix(1_789_202_437), "2026-09-12 08:40:37");
+    }
+
+    #[test]
+    fn filetime_is_converted_to_local_not_left_in_utc() {
+        // 2026-09-12T08:40:37Z as a FILETIME
+        let got = format_filetime("134336760370000000").expect("parses");
+        let local = format_unix(1_789_202_437 + local_offset_minutes() * 60);
+        assert_eq!(got, local);
+        // The regression this guards: a raw UTC render was exactly the offset off.
+        if local_offset_minutes() != 0 {
+            assert_ne!(got, "2026-09-12 08:40:37");
+        }
+    }
+
+    #[test]
+    fn local_offset_is_a_plausible_timezone() {
+        let m = local_offset_minutes();
+        assert!((-720..=840).contains(&m), "offset {m} minutes is not a real timezone");
+        assert_eq!(m % 15, 0, "offsets are always a multiple of 15 minutes");
+    }
 }

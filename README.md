@@ -6,16 +6,23 @@
   <p>
     <a href="https://pypi.org/project/everything-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
     <a href="https://pypi.org/project/everything-mcp/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
-    <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/elis132/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
+    <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/alwaysmy/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
   </p>
 </div>
 
 ---
 
+> **Personal fork notice** — this is a detached, self-maintained fork of
+> [`elis132/everything-mcp`](https://github.com/elis132/everything-mcp) (MIT).
+> The upstream remote was removed on 2026-09-12 and **upstream changes are no
+> longer tracked or merged**. The last absorbed upstream commit is pinned to the
+> local tag `upstream-base-elis132`, so history stays traceable without any
+> remote. Copyright remains with the original author — see [LICENSE](LICENSE).
+
 ## Quick start
 
 ```
-/plugin marketplace add elis132/everything-mcp
+/plugin marketplace add alwaysmy/everything-mcp
 /plugin install everything-mcp@everything-mcp
 ```
 
@@ -96,7 +103,7 @@ pip install everything-mcp  # or via pip
 From source:
 
 ```bash
-git clone https://github.com/elis132/everything-mcp.git
+git clone https://github.com/alwaysmy/everything-mcp.git
 cd everything-mcp && pip install -e ".[dev]"
 ```
 
@@ -279,4 +286,4 @@ MIT - see [LICENSE](LICENSE)
 
 [voidtools](https://www.voidtools.com/) for Everything, [Anthropic](https://anthropic.com/) for the Model Context Protocol, and the MCP community.
 
-<!-- mcp-name: io.github.elis132/everything-mcp -->
+<!-- mcp-name: io.github.alwaysmy/everything-mcp -->

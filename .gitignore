@@ -26,3 +26,6 @@ htmlcov/
 Thumbs.db
 .idea/
 .vscode/
+
+# Rust
+rust/target/

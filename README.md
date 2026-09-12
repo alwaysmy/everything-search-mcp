@@ -11,6 +11,16 @@
 
 ---
 
+> **The Rust implementation in [`rust/`](rust/) is the active one.** It is a
+> native MCP server with no Python runtime and no `es.exe` subprocess: ~0.5 ms
+> per search round trip and ~5 ms cold start, against ~134 ms and ~1681 ms for
+> the Python version.
+>
+> The Python package described below is kept for reference and is **no longer
+> maintained**; it is not a supported fallback. See [`rust/README.md`](rust/README.md).
+
+---
+
 > **Personal fork notice** — this is a detached, self-maintained fork of
 > [`elis132/everything-mcp`](https://github.com/elis132/everything-mcp) (MIT).
 > The upstream remote was removed on 2026-09-12 and **upstream changes are no

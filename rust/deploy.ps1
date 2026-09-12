@@ -18,6 +18,18 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $src = Join-Path $root 'target\release\everything-search-mcp.exe'
 
+# A running MCP server holds its own image open, and DSH respawns it within a
+# second of being killed - so deleting it usually loses the race. Renaming a
+# running executable is allowed on Windows (the mapping follows the file object),
+# so the name is freed by moving the old binary aside instead.
+function Clear-Target([string]$Path) {
+    if (-not (Test-Path $Path)) { return }
+    $old = "$Path.old"
+    Remove-Item $old -Force -ErrorAction SilentlyContinue
+    try { Move-Item $Path $old -Force -ErrorAction Stop }
+    catch { Remove-Item $Path -Force }
+}
+
 if (-not $NoBuild) {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         $env:PATH = 'D:\Rust\1.98.1\bin;' + $env:PATH
@@ -30,22 +42,14 @@ if (-not (Test-Path $src)) { throw "no binary at $src - run without -NoBuild fir
 
 $skillExe = Join-Path $SkillDir 'bin\everything-search-mcp.exe'
 New-Item -ItemType Directory -Force -Path (Split-Path $skillExe) | Out-Null
+Clear-Target $skillExe
 Copy-Item $src $skillExe -Force
 Write-Host "skill   $skillExe"
 
 if (Test-Path $BinDir) {
     foreach ($name in 'everything-search-mcp.exe', 'everything-mcp.exe') {
         $dst = Join-Path $BinDir $name
-        if (Test-Path $dst) {
-            # A running MCP server holds its own image open, and DSH respawns it
-            # within a second of being killed. Renaming a running executable is
-            # allowed on Windows (the mapping follows the file object), so the
-            # name is freed by moving the old binary aside instead of deleting it.
-            $old = "$dst.old"
-            Remove-Item $old -Force -ErrorAction SilentlyContinue
-            try { Move-Item $dst $old -Force -ErrorAction Stop }
-            catch { Remove-Item $dst -Force }
-        }
+        Clear-Target $dst
         try {
             New-Item -ItemType HardLink -Path $dst -Target $skillExe -ErrorAction Stop | Out-Null
             Write-Host "link    $dst"
@@ -54,6 +58,13 @@ if (Test-Path $BinDir) {
             Write-Host "copy    $dst   (hard link unavailable: $($_.Exception.Message))"
         }
     }
+}
+
+# The renamed-aside binaries are still mapped by whatever is running from them,
+# so this only succeeds once that process is gone.
+foreach ($dir in @((Split-Path $skillExe), $BinDir)) {
+    Get-ChildItem "$dir\everything*.exe.old" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ""

@@ -62,4 +62,10 @@ jobs:
             # 0 when Everything is reachable, 1 when it is not. Anything else is a bug.
             throw "search exited $LASTEXITCODE"
           }
+
           Write-Host "CLI smoke test passed"
+          # GitHub's pwsh wrapper ends the step with `exit $LASTEXITCODE`, and the
+          # last native command here is the search probe above - which legitimately
+          # exits 1 on a runner with no Everything installed. Without this the step
+          # reports failure after passing every check.
+          exit 0

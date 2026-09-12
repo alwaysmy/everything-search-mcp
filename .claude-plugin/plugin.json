@@ -5,8 +5,8 @@
   "author": {
     "name": "elis132"
   },
-  "homepage": "https://github.com/alwaysmy/everything-mcp",
-  "repository": "https://github.com/alwaysmy/everything-mcp",
+  "homepage": "https://github.com/alwaysmy/everything-search-mcp",
+  "repository": "https://github.com/alwaysmy/everything-search-mcp",
   "license": "MIT",
   "keywords": ["mcp", "everything", "voidtools", "file-search", "windows", "search"],
   "mcpServers": {

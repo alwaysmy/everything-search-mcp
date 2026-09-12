@@ -43,10 +43,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/alwaysmy/everything-mcp"
-Repository = "https://github.com/alwaysmy/everything-mcp"
-Issues = "https://github.com/alwaysmy/everything-mcp/issues"
-Changelog = "https://github.com/alwaysmy/everything-mcp/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/alwaysmy/everything-search-mcp"
+Repository = "https://github.com/alwaysmy/everything-search-mcp"
+Issues = "https://github.com/alwaysmy/everything-search-mcp/issues"
+Changelog = "https://github.com/alwaysmy/everything-search-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 everything-mcp = "everything_mcp:main"

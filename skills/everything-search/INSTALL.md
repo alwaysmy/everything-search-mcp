@@ -20,7 +20,7 @@ Cursor / VS Code 里已经存在的配置文件，并顺手探测 Everything 的
 如果这个文件不在（比如只拷了 `SKILL.md`），从 release 取：
 
 ```powershell
-gh release download rust-v0.2.0 --repo alwaysmy/everything-search-mcp `
+gh release download v0.3.0 --repo alwaysmy/everything-search-mcp `
   --pattern 'everything-search-mcp.exe' --dir '<本 skill 目录>\bin'
 # 或者直接下整个 skill 包：--pattern 'everything-search-skill.zip'
 ```
@@ -244,4 +244,5 @@ pip uninstall everything-mcp
 ## 相关文件
 
 - 使用指南：`SKILL.md`（工具选择、参数语义、Everything 语法、陷阱）
-- 维护仓库：`https://github.com/alwaysmy/everything-search-mcp`（分支 `rust`）
+- 维护仓库：`https://github.com/alwaysmy/everything-search-mcp`
+  （`main` = 原生实现；老的 Python 版冻结在 `legacy` 分支，不再维护、也不是回退方案）

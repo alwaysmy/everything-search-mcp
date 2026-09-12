@@ -1,124 +1,186 @@
 ---
 name: everything-search
-description: Find files and folders on Windows instantly using the Everything MCP tools (everything_search, everything_find_recent, everything_search_by_type, everything_file_details, everything_count_stats). Use whenever the user asks to locate, list, count, or size files anywhere on a Windows machine - dramatically faster than dir, Get-ChildItem, glob, or recursive directory walks.
+description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫秒级文件搜索）。触发词：找文件、搜文件、搜索文件、查找文件、文件搜索、Everything 搜索、按类型搜索、最近文件、文件详情、文件统计、文件大小、文件数量、找 datasheet / 手册 / 文档 / 图片 / 视频 / 代码、找工程目录、找项目、这个目录里有什么、列一下文件、哪个文件包含、在文件里找、什么最占空间、大文件、重复文件、空文件夹、在哪、位置、路径。English triggers — find file, locate file, search files, where is, list files, file search, search my computer, find the config file, find a document, largest files, duplicate files, empty folders, recent changes, what changed, which file contains, grep for text, find the datasheet, file size, count files, find project, find the project folder."
 ---
 
-# Everything File Search
+# everything-search MCP 使用指南
 
-The `everything_*` MCP tools query voidtools Everything's real-time NTFS index.
-A search over millions of files returns in milliseconds, so prefer these tools
-over shell commands (`dir /s`, `Get-ChildItem -Recurse`, glob) for ANY
-filename-based lookup outside the current project directory.
+调用 Windows 上基于 voidtools Everything 实时 NTFS 索引的 `everything_*` MCP 工具。
+**单次查询约 1 毫秒**，所以任何"按文件名/扩展名/大小/日期找东西"的场景都应该优先用它，
+而不是 `dir /s`、`Get-ChildItem -Recurse` 或 glob。
 
-## Picking the right tool
+## 前提：Everything 的 HTTP 服务器必须是开着的
 
-| Task | Tool |
-|---|---|
-| Find files/folders by name, extension, size, date | `everything_search` |
-| "What changed in the last hour/day/week?" | `everything_find_recent` |
-| All videos / documents / code / archives somewhere | `everything_search_by_type` |
-| Metadata or first N lines of specific files | `everything_file_details` |
-| "How many?" / "How much disk space?" | `everything_count_stats` |
+服务端**不再调用 `es.exe`**，而是直接连 Everything 内置的 HTTP 服务器
+（默认 `http://127.0.0.1:23333`）。
 
-Use `everything_count_stats` BEFORE listing when a query might match
-thousands of files - check the scope first, then narrow.
+> **工具报连接错误时，先检查这一项**：Everything → 工具 → 选项 → **HTTP 服务器**，
+> 确认已启用、端口是 23333。
+> 若改过端口，用环境变量 `EVERYTHING_HTTP_URL` 覆盖。
+>
+> 不需要 `es.exe`，也**没有** `EVERYTHING_ES_PATH` 这个变量（写了会被忽略）——
+> 所以没有任何外部程序路径需要配。整个服务端只依赖"Everything 进程在跑 + HTTP 口开着"。
 
-## Calling the tools
+## 配置 MCP（不用手写路径）
 
-All five tools take flat, named arguments that match their input schema
-exactly.  For example:
+同一个 exe 自带配置生成器：它知道自己的绝对路径，所以**任何客户端配置都不用手写**，
+skill 目录搬走也不会失效。
+
+```powershell
+<本 skill 目录>\bin\everything-search-mcp.exe config            # 只看：列出本机有哪些客户端 + 该粘什么
+<本 skill 目录>\bin\everything-search-mcp.exe config --write    # 应用：自动写进各客户端配置（先备份）
+<本 skill 目录>\bin\everything-search-mcp.exe config --target dsh --write
+<本 skill 目录>\bin\everything-search-mcp.exe config --json     # 机器可读
+```
+
+- 默认只处理**本机已存在**的配置文件：`dsh`(DeepSeek Harness) `claude`(Claude Code)
+  `claude-desktop` `codex` `gemini` `cursor` `vscode`，外加 `json`（纯打印一段通用块）。
+- 每个被改动的文件先备份成 `<原名>.bak-<UTC 时间戳>Z`；只替换自己那一条条目，
+  其它条目/注释原样保留；重复运行第二次是 no-op。
+- 输出里会顺带探测 Everything 是否可达、当前索引了多少对象。
+- **不带 `--write` 时一个字节都不写**。
+- 更多安装/排错细节见同目录 `INSTALL.md`。
+
+> **给 AI 的提示**：只有当用户明确要求"配置/安装 everything MCP"时才动配置。
+> 判断某个客户端到底有没有配好，用 `config` 的打印模式看，不要凭猜。
+
+## 没有 MCP 时的裸调用（CLI 模式）
+
+同一个 exe 也是命令行工具 —— **不带参数时是 MCP 服务端**（客户端就是这样拉起它的），
+**带子命令时是一次性 CLI**。所以即使 MCP 没装、没配、或当前 agent 不支持 MCP，
+也可以直接用 shell 调：
+
+```
+<本 skill 目录>\bin\everything-search-mcp.exe search "*.py" --path D:\Projects --max 20
+<本 skill 目录>\bin\everything-search-mcp.exe recent --period 1week --path D:\Projects
+<本 skill 目录>\bin\everything-search-mcp.exe count "ext:pdf" --exact-size
+<本 skill 目录>\bin\everything-search-mcp.exe details D:\a\b.rs --preview 20
+<本 skill 目录>\bin\everything-search-mcp.exe config            # 生成 MCP 配置
+<本 skill 目录>\bin\everything-search-mcp.exe --help
+```
+
+常用 flag：`--path` `--category` `--type file|folder` `--max` `--offset` `--sort`
+`--per-parent` `--regex` `--case` `--whole-word` `--match-path` `--total` `--probe`
+`--period` `--ext` `--preview` `--exact-size` `--breakdown` `--json`
+
+退出码：`0` 成功、`1` 查询失败（错误在 stderr）、`2` 参数错误。
+`--json` 输出结构化结果而非文本。
+
+> **优先用 MCP 工具**（`everything_*`）：它是常驻进程，省去每次启动开销，且结构化字段更全。
+> CLI 是**没有 MCP 时的兜底**，以及在脚本/CI 里用的形态。
+
+## 工具速查（5 个）
+
+| 目标 | 工具 |
+|------|------|
+| 按名字/扩展名/大小/日期/类别找文件或文件夹 | `everything_search` |
+| 最近改动过的东西（"这周改了什么"） | `everything_find_recent` |
+| 已知路径，要元数据或文本预览 | `everything_file_details` |
+| 只要数量和体积，不要列表 | `everything_count_stats` |
+| **一次问好几件事**（有没有 Cargo.toml / package.json / pyproject.toml） | `everything_search_batch` |
+
+> 老版本里的 `everything_search_by_type` **已并入 `everything_search` 的 `category` 参数**。
+> 不要再调那个工具名。
+
+## 参数一律平铺在顶层
 
 ```json
-{"query": "*.py", "path": "C:\\Projects"}
+{ "query": "*.py", "path": "D:\\Projects", "category": "code" }
 ```
 
-Do not wrap those arguments in a `params` object: a nested payload is rejected
-with `params.<field> Extra inputs are not permitted`.  This matters because
-everything-search-mcp 1.0.x did nest its arguments, so older examples circulating for
-this server may show the wrong shape.
+**不要**包一层 `params` —— 服务端为了兼容老客户端虽然也接受 `{"params": {...}}`，
+但正确写法是平铺。
 
-The `tool(args...)` shorthand used below means one JSON argument per key;
-a client that reads the schema builds these automatically.
+## `everything_search` 关键参数
 
-## Query syntax essentials
+| 参数 | 说明 |
+|---|---|
+| `query` | Everything 语法，见下。用了 `category` 或 `entry_type` 时可以留空 |
+| **`category`** | 十选一：`code` `document` `image` `video` `audio` `archive` `executable` `font` `3d` `data`。**优先用它**，不要自己手拼扩展名列表 |
+| **`entry_type`** | `any`（默认）/ `file` / `folder`。**找工程目录、安装目录时必须用 `folder`**，不要靠结果猜类型 |
+| `path` | 限定目录树。比在 query 里写 `path:` 更可靠 |
+| `max_results` | 1–500，默认 50 |
+| `offset` | 分页 |
+| `sort` | 14 种，见下表；默认 `date-modified-desc` |
+| `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符 |
+| **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 50 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
+| `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
 
-Space between terms = AND. Key operators:
+## 看 `effective_query` 自查
 
-```
-report.pdf                    name contains "report.pdf"
-*.py                          extension wildcard
-ext:py;js;ts                  multiple extensions
-path:C:\Projects ext:py       restrict to a directory tree (or use the path argument)
-parent:C:\Projects ext:py     direct children of one folder
-size:>10mb  size:1kb..1mb     size filters
-dm:today  dm:last1week        modified date
-dc:2024                       created date (SLOW: creation time is not
-                              indexed by default; may time out - prefer dm:)
-"exact name.txt"              phrase with spaces (quote it)
-a | b                         OR
-!node_modules                 exclude
-folder:                       folders only
-file:                         files only
-dupe:                         duplicate names
-empty:                        empty folders
-content:TODO ext:py           file contents (SLOW, needs content indexing)
-regex:^test_.*\.py$           regex (or pass match_regex=true)
-```
+每个结果都会回传 **`effective_query`** —— 服务端实际执行的 Everything 表达式
+（`path`/`category`/`entry_type`/`period` 展开之后）。**结果不合预期时先看它**，
+比猜哪个参数没生效快得多。
 
-## Tool reference
+结构化客户端还能拿到 `structuredContent`，字段与文本内容一致：
+`query` / `effective_query` / `total` / `total_accuracy` / `returned` / `offset` /
+`next_offset` / `has_more` / `results[]`，每条含 `name` `path` `full_path` `type` `size` `modified`。
 
-### `everything_search`
+> `modified` 是**本地时间**（和资源管理器显示的一致），格式 `YYYY-MM-DD HH:MM:SS`。
+> 直接报给用户即可，不要自己再加时区偏移。
 
-| Argument | Default | Notes |
+## 精度：哪些是精确的，哪些是采样
+
+| 量 | 精度 | 说明 |
 |---|---|---|
-| `query` | required | Everything syntax above, 1-2000 chars |
-| `path` | `""` | Restrict to one directory; prefer this over `path:` in the query |
-| `max_results` | `50` | 1-500 |
-| `offset` | `0` | Skip N results, for paging |
-| `sort` | `date-modified-desc` | One of the 14 values below |
-| `match_case` | `false` | Case-sensitive |
-| `match_whole_word` | `false` | Whole words only |
-| `match_regex` | `false` | Treat `query` as a regex |
-| `match_path` | `false` | Match the full path instead of the filename |
-| `include_total` | `false` | Also return the total match count (extra call) |
+| `count` / `total` | **exact** | Everything 直接报告真实总数，与取多少行无关 |
+| `total_size` | **sampled** | HTTP API 没有聚合，是按取到的样本外推的，必须当成估算 |
+| 扩展名分布 | **sampled** | 同上 |
 
-### `everything_find_recent`
+**不要把采样的体积当成精确值报给用户。**
 
-`period` (default `1day`), `path`, `extensions` (`py,js,ts` or `py;js;ts`),
-`query` (extra filter), `max_results` (default `50`), `auto_expand` (default
-`true`). Valid `period` values: `1min`, `5min`, `10min`, `15min`, `30min`,
-`1hour`, `2hours`, `6hours`, `12hours`, `today`, `yesterday`, `1day`, `3days`,
-`1week`, `2weeks`, `1month`, `3months`, `6months`, `1year`, or raw Everything
-syntax like `last2hours`. Anything else is rejected rather than passed through.
+## `everything_find_recent`
 
-### `everything_search_by_type`
+- `period`：默认 `1day`。可选 `1min` `5min` `10min` `15min` `30min` `1hour` `2hours` `6hours`
+  `12hours` `today` `yesterday` `1day` `3days` `1week` `2weeks` `1month` `3months`
+  `6months` `1year`，或原始语法如 `last2hours`。非法值会被明确拒绝。
+- `extensions`：`py,js,ts` 或 `py;js;ts` 都行。
+- `auto_expand`：默认 true。窗口内结果太少时**自动放宽到全部时间**。
+- **注意回传的 `requested_period` / `effective_period` / `expanded`** ——
+  `expanded: true` 说明结果**不是**那个时间窗内的，别当成"最近 24 小时的变化"。
 
-`file_type` (required - see the categories below), plus `query`, `path`,
-`max_results`, `sort`. Builds the `ext:` clause for you.
+## `everything_file_details`
 
-### `everything_file_details`
+- `paths`：1–20 个路径，**必须绝对路径**。
+- `preview_lines`：0–200。文本文件的预览；`preview_truncated` 告诉你是否被截断。
 
-`paths` (required, 1-20 entries, **must be absolute**), `preview_lines`
-(0-200, default `0`).
+## `everything_count_stats`
 
-### `everything_count_stats`
+- `count` 精确、`total_size`/`breakdown` 采样（见上）。
+- `sample_sort`：**开了 breakdown 时不能用 `name`**（文件名排序与扩展名相关，会带偏采样）。
+- `category` / `entry_type` / `path` 都可用来限定。
 
-`query` (required), `path`, `include_size` (default `true`),
-`breakdown_by_extension` (default `false`, samples up to 500 hits),
-`sample_sort` (default `date-modified-desc`).
+## 排序值（14 种）
 
-## Sort options
+`name` `name-desc` `path` `path-desc` `size` `size-asc` `size-desc`
+`date-modified` `date-modified-asc` `date-modified-desc`
+`date-created` `date-created-asc` `date-created-desc` `extension`
 
-`name`, `name-desc`, `path`, `path-desc`, `size`, `size-asc`, `size-desc`,
-`date-modified`, `date-modified-asc`, `date-modified-desc`, `date-created`,
-`date-created-asc`, `date-created-desc`, `extension`.
+非法排序值会被拒绝（不会静默回退）。
 
-`size` and `size-asc` are aliases, as are `date-modified`/`date-modified-asc`
-and `date-created`/`date-created-asc`.
+## 常用 Everything 语法
 
-## file_type categories
+```text
+*.py                          # 所有 Python 文件
+ext:py;js;ts                  # 多扩展名（优先用 category 参数代替）
+ext:py !test !__pycache__     # 排除
+folder:  /  file:             # 只搜目录 / 只搜文件（优先用 entry_type 参数）
+size:>10mb   size:1kb..1mb    # 大小
+dm:today   dm:last1week       # 修改时间（优先用 find_recent）
+dc:2024                       # 创建时间（慢！默认未索引）
+"exact name.txt"              # 精确文件名（含空格要加引号）
+project1 | project2           # OR
+!node_modules                 # 排除
+dupe:                         # 重复文件名
+empty:                        # 空文件夹
+content:TODO ext:py           # 内容搜索：需要 Everything 开启内容索引，否则恒返回 0
+regex:^test_.*\.py$           # 正则（或用 match_regex 参数）
+parent:C:\src ext:py          # src 下一层
+```
 
-| Category | Extensions |
+## 文件类别覆盖的扩展名
+
+| 类别 | 扩展名 |
 |---|---|
 | `audio` | mp3 wav flac aac ogg wma m4a opus aiff alac |
 | `video` | mp4 avi mkv mov wmv flv webm m4v mpeg mpg 3gp ts |
@@ -131,42 +193,26 @@ and `date-created`/`date-created-asc`.
 | `3d` | obj fbx stl blend dae 3ds gltf glb usd usda usdz step iges |
 | `data` | csv tsv json jsonl ndjson xml sqlite db mdb accdb parquet arrow avro hdf5 feather |
 
-## Patterns that work well
+## 最佳实践
 
-- Locate a project someone mentioned: `everything_search(query="folder: myproject")`
-- Find a config file of unknown location: `everything_search(query="wg0.conf | wireguard ext:conf")`
-- Recently downloaded file: `everything_find_recent(period="1day", path="C:\\Users\\<user>\\Downloads")`
-- `everything_find_recent` auto-expands to all time when the period returns
-  fewer than `max_results` results (pass `auto_expand=false` for a strict window).
-- Disk usage of build artifacts: `everything_count_stats(query="node_modules folder:", include_size=true, breakdown_by_extension=true)`
-- Total number of matches without listing: `everything_search(query="ext:py", max_results=1, include_total=true)`
-- Then inspect what you found: `everything_file_details(paths=[...], preview_lines=30)`
+1. **先粗后细**：先用简单 `query`，结果太多再加 `path` / `category` / `ext:`。
+2. **找目录用 `entry_type: "folder"`**，不要从文件结果里猜哪个是工程根目录。
+3. **类型搜索用 `category`**，不要手动拼扩展名列表。
+4. **最近改动用 `everything_find_recent`**，不要手写 `dm:`。
+5. **可能命中上千条时先用 `everything_count_stats` 探规模**，再决定要不要列表。
+6. **结果不合预期先读 `effective_query`**。
+7. **要预览文件内容**：先 `everything_search` 拿路径，再 `everything_file_details`；
+   或者直接用 agent 自己的 read 工具（本 MCP 不重复提供文件读取能力）。
 
-## Pitfalls
+## 陷阱与排错
 
-- The `everything_*` tools only exist when the Everything MCP server is
-  connected. If this session has no `everything_*` tools, fall back to running
-  the CLI directly (`es.exe -n 50 <query>`) if available, and offer to
-  configure the MCP server instead of guessing at tool calls.
-- `es.exe` ships with Everything 1.5a but NOT with stable 1.4. If the tools
-  report "es.exe not found" on a custom install location, set the
-  `EVERYTHING_ES_PATH` environment variable to the full es.exe path.
-- **Prefer the `path` parameter over embedding `path:"..."` in the query.**
-  A `path:"..."` clause inside the query string is extracted and routed to the
-  es.exe `-path` switch, but paths containing spaces are safest passed via the
-  dedicated `path` argument.
-- `include_total` on `everything_search` adds one extra `-get-result-count`
-  call - leave it off when searching hot paths repeatedly.
-- The extension breakdown in `everything_count_stats` samples files; the
-  default `sample_sort` (`date-modified-desc`) is less biased than `name`,
-  which correlates with file extensions.
-- Results reflect the index, not content: `content:` search only works if the
-  user enabled content indexing in Everything (rare) - to search inside files,
-  find candidates by name first, then read them.
-- Everything must be running; if tools return connection errors, tell the user
-  to start Everything (system tray). Do not suggest setting
-  `EVERYTHING_INSTANCE` unless they configured a named instance.
-- Search is across ALL indexed drives by default - add `path` to scope, and
-  prefer `max_results`/`offset` paging over huge listings.
-- `everything_file_details` rejects relative paths (the server's working
-  directory is not predictable), so resolve them before calling.
+- **连接失败** → 检查 Everything 的 HTTP 服务器是否启用（见文首）；这是唯一的传输途径，没有兜底。
+- **`total_size` 是采样** → 不要当精确值。
+- **Everything 必须在运行**（系统托盘）。
+- **默认搜全部已索引磁盘** → 不加 `path` 就是全盘；大结果集用 `max_results`/`offset` 分页。
+- **`content:` 不是"慢"，是"没有"** → 未开启内容索引时（`include_file_content=0`）一律**约 2ms 返回 0 条**，
+  Everything 不做任何按需扫描。这是个静默失败：**不会报错，只会返回空结果**，很容易误判成"文件里没这个词"。
+  要按内容找文件，正确做法是**先按文件名/类型缩小候选，再用 agent 自己的 read/grep 工具去读**。
+- **即便开了内容索引，也还依赖 IFilter** → 文件类型必须有可用的文本过滤器（Windows 自带纯文本；
+  Office/PDF 需要额外装）。**本机没有 PDF IFilter**，所以 PDF 即使被列入索引范围也提取不出文本。
+- **NTFS 之外**：exFAT/FAT/网络盘没有 MFT，Everything 只能慢速扫描，结果可能不全。

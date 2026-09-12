@@ -82,19 +82,58 @@ allow_file_download=0
 
 ## Tools
 
-Five tools, matching the Python implementation's surface:
-
 | Tool | Purpose |
 |---|---|
-| `everything_search` | Query by name, extension, size, date; supports `path`, paging, sort, regex |
-| `everything_search_by_type` | One of 10 categories (`audio`…`data`) instead of hand-written `ext:` lists |
-| `everything_find_recent` | Files modified within a period, with auto-expand to all time |
+| `everything_search` | Query by name, extension, size, date; supports a `category` preset, `entry_type` (file/folder), `path` scoping, paging, sort, regex, `max_per_parent` diversification and an opt-in multi-`probe` |
+| `everything_find_recent` | Files modified within a period, with auto-expand to all time and explicit requested-vs-effective window reporting |
 | `everything_file_details` | Metadata and optional text preview for specific paths |
 | `everything_count_stats` | Count/size without listing, optional per-extension breakdown |
+| `everything_search_batch` | 1-8 searches in one call, to save agent round trips |
 
-Input schemas are **flat** (as the Python 1.1.0 release intended). The server
-additionally **accepts a `params`-wrapped argument object** so that clients
-holding a stale cached schema keep working.
+`category` replaces the former `everything_search_by_type` tool. The category
+table is worth keeping, but a second search entry point made the model choose
+between two tools that do the same thing.
+
+Every tool carries `annotations` (`readOnlyHint`, `idempotentHint`,
+`destructiveHint: false`, `openWorldHint: false`) and an `outputSchema`, and
+returns `structuredContent` alongside text that carries the **same** information.
+Clients have disagreed about which channel reaches the model, so neither is a
+stub. Input schemas are **flat**; the server also **accepts a `params`-wrapped
+argument object** so clients holding a stale cached schema keep working.
+
+### Diagnosing a result set: `effective_query`
+
+Every search result reports the exact Everything expression that ran, after
+`path` / `category` / `entry_type` expansion:
+
+```json
+{
+  "query": "*.rs",
+  "effective_query": "path:\"D:\\proj\" file: ext:rs;...;hcl *.rs",
+  "total": 6, "total_accuracy": "exact",
+  "returned": 3, "offset": 0, "next_offset": 3, "has_more": true,
+  "results": [{"name": "tools.rs", "path": "D:\\proj\\src",
+               "full_path": "D:\\proj\\src\\tools.rs", "type": "file",
+               "size": 42300, "modified": "2026-09-12 07:27:55"}],
+  "elapsed_ms": 0.81
+}
+```
+
+### Accuracy is labelled
+
+`count` / `total` are **exact** — Everything reports the true total independently
+of how many rows are fetched, so `count_stats` asks for a single row when size is
+not needed. `total_size` and the per-extension breakdown are **sampled**: the HTTP
+API has no aggregate, so they are extrapolated from the fetched sample and
+reported as `"sampled"` rather than passed off as exact.
+
+### Multi-probe
+
+`probe: true` widens a thin result set for a bare term by also looking for it in
+the path and among folders, because agents often name something that is really a
+directory rather than a file. It is opt-in, only fires for bare terms, and every
+extra query is reported in `probes` so the widening is never silent.
+
 
 ## Differences from the Python implementation
 

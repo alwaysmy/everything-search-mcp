@@ -12,9 +12,8 @@
 //!  - Every tool carries `annotations` and an `outputSchema`, and returns
 //!    `structuredContent` plus text that carries the same information.
 
-use crate::everything::{
-    self, Client, Item, Query, FILE_TYPE_NAMES, PERIOD_NAMES, SORT_NAMES,
-};
+use crate::everything::{self, Client, Item, Query, PERIOD_NAMES, SORT_NAMES};
+use crate::filetype;
 use crate::jsonrpc::{Handler, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -75,9 +74,15 @@ fn item_schema() -> Value {
             "full_path": {"type": "string"},
             "type": {"type": "string", "enum": ["file", "folder"]},
             "size": {"type": "integer", "description": "bytes; absent for folders"},
-            "modified": {"type": "string", "description": "local time, YYYY-MM-DD HH:MM:SS"}
+            "modified": {"type": "string", "description": "local time, YYYY-MM-DD HH:MM:SS"},
+            "kind": {"type": "string",
+                "description": "file category, the same vocabulary as the category parameter, plus text and unknown. Feed it straight back into category."},
+            "content_mode": {"type": "string", "enum": ["text", "binary", "unknown"],
+                "description": "whether the file is worth reading as text. From the extension alone, so unknown is common for ambiguous types; everything_file_details sniffs the header to resolve it."},
+            "format": {"type": "string", "description": "friendly format name, e.g. rust, pdf, png"},
+            "type_source": {"type": "string", "enum": ["extension", "magic", "heuristic"]}
         },
-        "required": ["name", "path", "full_path", "type"],
+        "required": ["name", "path", "full_path", "type", "kind", "content_mode", "type_source"],
         "additionalProperties": false
     })
 }
@@ -146,8 +151,15 @@ fn details_output_schema() -> Value {
                         "size": {"type": "integer"},
                         "modified": {"type": "string"},
                         "entries": {"type": "integer", "description": "for folders: number listed"},
-                        "preview": {"type": "string"},
+                        "kind": {"type": "string", "description": "file category, same vocabulary as the category parameter"},
+                        "content_mode": {"type": "string", "enum": ["text", "binary", "unknown"],
+                            "description": "resolved by sniffing the header when the extension cannot say"},
+                        "format": {"type": "string"},
+                        "type_source": {"type": "string", "enum": ["extension", "magic", "heuristic"]},
+                        "preview": {"type": "string", "description": "triage preview, text files only"},
+                        "preview_bytes": {"type": "integer"},
                         "preview_truncated": {"type": "boolean"},
+                        "preview_skipped": {"type": "string", "description": "why no preview was produced"},
                         "error": {"type": "string"}
                     },
                     "required": ["path", "exists"],
@@ -170,9 +182,12 @@ fn stats_output_schema() -> Value {
             "count": {"type": "integer"},
             "count_accuracy": {"type": "string", "enum": ["exact"],
                 "description": "always exact: Everything reports the true total independently of how many rows are fetched"},
-            "total_size": {"type": "integer"},
-            "total_size_accuracy": {"type": "string", "enum": ["sampled"],
-                "description": "sampled: Everything's HTTP API has no aggregate/group-by, so size is summed over the fetched sample and extrapolated"},
+            "total_size": {"type": "integer",
+                "description": "absent when no exact sum was requested or the row cap was hit"},
+            "total_size_accuracy": {"type": "string", "enum": ["exact", "unavailable"]},
+            "total_size_note": {"type": "string",
+                "description": "why the size is unavailable, when it is"},
+            "rows_summed": {"type": "integer"},
             "sampled": {"type": "integer"},
             "breakdown": {
                 "type": "array",
@@ -187,7 +202,7 @@ fn stats_output_schema() -> Value {
                     "additionalProperties": false
                 }
             },
-            "breakdown_accuracy": {"type": "string", "enum": ["sampled"]},
+            "breakdown_accuracy": {"type": "string", "enum": ["exact", "sampled"]},
             "elapsed_ms": {"type": "number"}
         },
         "required": ["query", "effective_query", "count", "count_accuracy", "elapsed_ms"],
@@ -274,7 +289,7 @@ fn compile(f: &Filters) -> Result<String, String> {
     }
     if let Some(c) = f.category.filter(|c| !c.trim().is_empty()) {
         let clause = everything::file_type_query(c)
-            .ok_or_else(|| format!("invalid category '{c}'. Valid: {}", FILE_TYPE_NAMES.join(", ")))?;
+            .ok_or_else(|| format!("invalid category '{c}'. Valid: {}", everything::file_type_names().join(", ")))?;
         parts.push(clause.to_string());
     }
     let tail = f.raw.trim();
@@ -305,11 +320,13 @@ impl Handler for Tools {
 
     fn list_tools(&self) -> Value {
         let sort_desc = format!("Sort order. One of: {}", SORT_NAMES.join(", "));
+        let cats = everything::file_type_names();
+        let cats_desc = format!("One of: {}", cats.join(", "));
 
         let search_schema = schema(
             json!({
                 "query": p_string("Search query in Everything syntax, e.g. '*.rs', 'ext:py;js', 'size:>10mb', 'dm:today', or a regex when match_regex is set. Space = AND, | = OR, ! excludes. May be empty when a category or entry_type filter alone expresses the intent.", Some("")),
-                "category": p_enum("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause.", FILE_TYPE_NAMES, Some("")),
+                "category": p_enum(&format!("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause. {cats_desc}."), &cats, Some("")),
                 "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
                 "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
@@ -347,7 +364,7 @@ impl Handler for Tools {
                     "minItems": 1,
                     "maxItems": 20
                 }),
-                "preview_lines": p_int("Lines of text content to preview (0 = none, max 200)", 0, 0, 200),
+                "preview_lines": p_int("Triage preview: at most this many lines, and only for files whose content resolves to text. Use your own file-reading tool for full contents.", 0, 0, 200),
             }),
             &["paths"],
         );
@@ -355,11 +372,12 @@ impl Handler for Tools {
         let stats_schema = schema(
             json!({
                 "query": p_string("Search query to count. Same syntax as everything_search.", None),
-                "category": p_enum("Restrict to a file category", FILE_TYPE_NAMES, Some("")),
+                "category": p_enum(&format!("Restrict to a file category. {cats_desc}."), &cats, Some("")),
                 "entry_type": p_enum("Restrict to files or folders.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict counting to this directory", Some("")),
-                "include_size": p_bool("Also report total size of matching files (sampled)", true),
-                "breakdown_by_extension": p_bool("Break the sample down by extension", false),
+                "include_size": p_bool("Report total size of matching files. Without exact_size the figure is omitted entirely rather than estimated from a biased sample.", true),
+                "exact_size": p_bool("Sum every match to get an exact total size. Costs one paged pass over the result set, so it is opt-in; refused above 200000 matches. Also makes the extension breakdown exact.", false),
+                "breakdown_by_extension": p_bool("Break the result set down by extension", false),
                 "sample_sort": p_string("Sort used when sampling for the breakdown. Name sorts are rejected when a breakdown is requested, because filename sort correlates with extension and biases the sample.", Some("date-modified-desc")),
             }),
             &["query"],
@@ -373,7 +391,7 @@ impl Handler for Tools {
                  "Find files modified within a recent time period - useful for what changed in a project, recent downloads, or today's logs. Sorted newest-first, with optional widening when the window is too narrow.",
                  recent_schema, recent_output_schema()),
             tool("everything_file_details",
-                 "Get metadata and an optional text preview for specific paths, read from the filesystem rather than the search index. Use after a search to inspect what was found.",
+                 "Inspect specific paths: metadata plus a resolved type (kind, text-or-binary, format), sniffing the file header only when the extension cannot say. Use it to decide whether a file is worth reading; it is not a replacement for your own file-reading tool.",
                  details_schema, details_output_schema()),
             tool("everything_count_stats",
                  "Count and measure files matching a query without listing them. The count is exact; size and per-extension figures are sampled and labelled as such.",
@@ -445,6 +463,9 @@ fn cap(cfg: &everything::Config, n: usize) -> usize {
 }
 
 /// Convert hits to the structured form (null fields are omitted, not sent as null).
+///
+/// Classification here is extension-only on purpose: touching the filesystem per
+/// result would turn one index lookup into N file operations.
 fn item_json(it: &Item) -> Value {
     let mut o = json!({
         "name": it.name,
@@ -452,6 +473,19 @@ fn item_json(it: &Item) -> Value {
         "full_path": it.full_path(),
         "type": if it.is_dir { "folder" } else { "file" },
     });
+    if it.is_dir {
+        o["kind"] = json!("folder");
+        o["content_mode"] = json!("unknown");
+        o["type_source"] = json!("extension");
+    } else {
+        let t = filetype::classify(&it.name);
+        o["kind"] = json!(t.kind);
+        o["content_mode"] = json!(t.content_mode);
+        o["type_source"] = json!(t.type_source);
+        if !t.format.is_empty() {
+            o["format"] = json!(t.format);
+        }
+    }
     if let Some(sz) = it.size {
         o["size"] = json!(sz);
     }
@@ -510,7 +544,57 @@ fn format_items(items: &[Item], offset: usize, total: u64) -> String {
 
 // ---------------------------------------------------------------- tools
 
+/// Everything's HTTP API returns sizes per row but has no aggregate, so summing
+/// every match is the only route to an exact total. Bounded so a huge query cannot
+/// run away, and the caller is told when the bound is hit rather than given a guess.
+const EXACT_SIZE_MAX_ROWS: u64 = 200_000;
+
 impl Tools {
+    fn sum_all_sizes(
+        &self,
+        effective: &str,
+        sort: &str,
+        already_have: usize,
+        running: u64,
+        total: u64,
+    ) -> Result<u64, String> {
+        if total > EXACT_SIZE_MAX_ROWS {
+            return Err(format!(
+                "{total} matches exceeds the {EXACT_SIZE_MAX_ROWS}-row cap for an exact sum; \
+                 narrow the query with path or category"
+            ));
+        }
+        let mut sum = running;
+        let mut offset = already_have;
+        while (offset as u64) < total {
+            let page = self.client.query(&Query {
+                search: effective,
+                count: 500,
+                offset,
+                sort,
+                ascending: !sort.ends_with("-desc"),
+                case: false,
+                whole_word: false,
+                regex: false,
+                match_path: false,
+                path: None,
+            })?;
+            if page.results.is_empty() {
+                break;
+            }
+            for r in &page.results {
+                if let Some(sz) = r.size.as_deref().and_then(|s| s.parse::<u64>().ok()) {
+                    sum += sz;
+                }
+            }
+            offset += page.results.len();
+            if page.results.len() < 500 {
+                break;
+            }
+        }
+        Ok(sum)
+    }
+
     fn search(&mut self, args: &Value) -> Result<ToolOutput, String> {
         let started = Instant::now();
         let query = s(args, "query");
@@ -775,33 +859,73 @@ impl Tools {
                     } else {
                         e["type"] = json!(if md.is_file() { "file" } else { "other" });
                         e["size"] = json!(md.len());
+
+                        // Level 2 classification. Only sniff when the name cannot tell
+                        // us, and only read a small header to do it.
+                        let name = pathref
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let mut t = filetype::classify(&name);
+                        if t.content_mode == "unknown" && md.is_file() {
+                            if let Ok(mut f) = std::fs::File::open(pathref) {
+                                use std::io::Read;
+                                let mut head = vec![0u8; filetype::SNIFF_BYTES];
+                                if let Ok(n) = f.read(&mut head) {
+                                    head.truncate(n);
+                                    t = filetype::refine(t, &head);
+                                }
+                            }
+                        }
+                        e["kind"] = json!(t.kind);
+                        e["content_mode"] = json!(t.content_mode);
+                        e["type_source"] = json!(t.type_source);
+                        if !t.format.is_empty() {
+                            e["format"] = json!(t.format);
+                        }
+
                         text.push_str(&format!(
                             "  size: {} ({} bytes)\n",
                             everything::human_size(md.len()),
                             md.len()
                         ));
+                        text.push_str(&format!(
+                            "  type: {} / {} (via {})\n",
+                            t.kind, t.content_mode, t.type_source
+                        ));
+
                         if preview > 0 {
-                            match std::fs::read(pathref) {
-                                Ok(bytes) => {
-                                    let lossy = String::from_utf8_lossy(&bytes);
-                                    let mut it = lossy.lines();
-                                    let lines: Vec<&str> = it.by_ref().take(preview).collect();
-                                    let truncated = it.next().is_some();
-                                    let joined = lines.join("\n");
-                                    e["preview"] = json!(joined);
-                                    e["preview_truncated"] = json!(truncated);
-                                    text.push_str("  preview:\n");
-                                    for l in &lines {
-                                        text.push_str(&format!("    {l}\n"));
+                            if t.content_mode == "text" {
+                                // A triage preview: enough to judge relevance, not a
+                                // substitute for the agent's own read tool.
+                                match std::fs::read(pathref) {
+                                    Ok(bytes) => {
+                                        let lossy = String::from_utf8_lossy(&bytes);
+                                        let mut it = lossy.lines();
+                                        let lines: Vec<&str> = it.by_ref().take(preview).collect();
+                                        let truncated = it.next().is_some();
+                                        e["preview"] = json!(lines.join("\n"));
+                                        e["preview_bytes"] = json!(bytes.len());
+                                        e["preview_truncated"] = json!(truncated);
+                                        text.push_str("  preview:\n");
+                                        for l in &lines {
+                                            text.push_str(&format!("    {l}\n"));
+                                        }
+                                        if truncated {
+                                            text.push_str("  (truncated)\n");
+                                        }
                                     }
-                                    if truncated {
-                                        text.push_str("  (preview truncated)\n");
+                                    Err(err) => {
+                                        e["error"] = json!(err.to_string());
+                                        text.push_str(&format!("  preview unavailable: {err}\n"));
                                     }
                                 }
-                                Err(err) => {
-                                    e["error"] = json!(err.to_string());
-                                    text.push_str(&format!("  preview unavailable: {err}\n"));
-                                }
+                            } else {
+                                text.push_str(&format!(
+                                    "  preview: skipped (content_mode is {})\n",
+                                    t.content_mode
+                                ));
+                                e["preview_skipped"] = json!(t.content_mode);
                             }
                         }
                     }
@@ -831,6 +955,7 @@ impl Tools {
         }
         let path = opt(args, "path");
         let include_size = b(args, "include_size", true);
+        let want_exact = b(args, "exact_size", false);
         let breakdown = b(args, "breakdown_by_extension", false);
         let sample_sort = s_or(args, "sample_sort", "date-modified-desc");
         // Only meaningful when a breakdown is actually sampled.
@@ -881,25 +1006,53 @@ impl Tools {
 
         if include_size {
             let known: Vec<u64> = items.iter().filter_map(|i| i.size).collect();
-            let sum: u64 = known.iter().sum();
-            if known.is_empty() || known.len() as u64 >= total {
-                structured["total_size"] = json!(sum);
+            let partial: u64 = known.iter().sum();
+            if known.len() as u64 >= total {
+                // the sample already covers every match, so this really is exact
+                structured["total_size"] = json!(partial);
                 structured["total_size_accuracy"] = json!("exact");
-                text.push_str(&format!("total size: {} ({} bytes, exact)\n", everything::human_size(sum), sum));
-            } else {
-                // Extrapolate from the sample, and say so.
-                let avg = sum as f64 / known.len() as f64;
-                let est = (avg * total as f64) as u64;
-                structured["total_size"] = json!(est);
-                structured["total_size_accuracy"] = json!("sampled");
-                structured["sampled"] = json!(known.len());
                 text.push_str(&format!(
-                    "total size: ~{} ({} bytes, sampled from {} of {} files)\n",
-                    everything::human_size(est),
-                    est,
+                    "total size: {} ({} bytes, exact)\n",
+                    everything::human_size(partial),
+                    partial
+                ));
+            } else if want_exact {
+                match self.sum_all_sizes(&effective, &sample_sort, known.len(), partial, total) {
+                    Ok(sum) => {
+                        structured["total_size"] = json!(sum);
+                        structured["total_size_accuracy"] = json!("exact");
+                        structured["rows_summed"] = json!(total);
+                        text.push_str(&format!(
+                            "total size: {} ({} bytes, exact - summed all {} matches)\n",
+                            everything::human_size(sum),
+                            sum,
+                            total
+                        ));
+                    }
+                    Err(why) => {
+                        // Field omitted rather than sent as null, matching how size
+                        // and modified are omitted when unknown.
+                        structured["total_size_accuracy"] = json!("unavailable");
+                        structured["total_size_note"] = json!(why);
+                        text.push_str(&format!("total size: unavailable ({why})\n"));
+                    }
+                }
+            } else {
+                // Deliberately NOT estimated. File sizes are heavily skewed and a
+                // top-N slice is not a random sample: extrapolating from it produced
+                // figures that contradicted each other (23.6 GB combined versus
+                // 84 GB for one member of that same set). A wrong number is worse
+                // than no number.
+                let note = format!(
+                    "not estimated: file sizes are heavily skewed and {} of {} rows is not a \
+                     random sample, so extrapolation is not meaningful. Pass exact_size=true to \
+                     sum every match.",
                     known.len(),
                     total
-                ));
+                );
+                structured["total_size_accuracy"] = json!("unavailable");
+                structured["total_size_note"] = json!(note);
+                text.push_str(&format!("total size: unavailable - {note}\n"));
             }
         }
 
@@ -919,12 +1072,18 @@ impl Tools {
                 .iter()
                 .map(|(ext, (n, sz))| json!({"extension": ext, "count": n, "size": sz}))
                 .collect();
-            text.push_str(&format!("breakdown (sampled from {} of {} files):\n", items.len(), total));
+            let covers_all = items.len() as u64 >= total;
+            let accuracy = if covers_all { "exact" } else { "sampled" };
+            text.push_str(&format!(
+                "breakdown ({accuracy}, from {} of {} files):\n",
+                items.len(),
+                total
+            ));
             for (ext, (n, sz)) in by_ext.iter().take(40) {
                 text.push_str(&format!("  {ext:<12} {n:>6}  {}\n", everything::human_size(*sz)));
             }
             structured["breakdown"] = json!(list);
-            structured["breakdown_accuracy"] = json!("sampled");
+            structured["breakdown_accuracy"] = json!(accuracy);
             structured["sampled"] = json!(items.len());
         }
 

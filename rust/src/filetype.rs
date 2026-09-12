@@ -404,3 +404,138 @@ pub fn decode_text(bytes: &[u8]) -> String {
             .to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds_come_from_the_search_category_table() {
+        for (name, kind) in [
+            ("a.rs", "code"), ("a.py", "code"), ("a.png", "image"), ("a.pdf", "document"),
+            ("a.zip", "archive"), ("a.exe", "executable"), ("a.mp3", "audio"),
+            ("a.mp4", "video"), ("a.ttf", "font"), ("a.stl", "3d"), ("a.csv", "data"),
+        ] {
+            assert_eq!(classify(name).kind, kind, "{name}");
+        }
+    }
+
+    #[test]
+    fn content_mode_is_a_separate_axis() {
+        let svg = classify("x.svg");
+        assert_eq!(svg.kind, "image");
+        assert_eq!(svg.content_mode, "text", "an SVG is an image AND text");
+
+        let docx = classify("x.docx");
+        assert_eq!(docx.kind, "document");
+        assert_eq!(docx.content_mode, "binary", "a docx is a document and binary");
+
+        let rs = classify("x.rs");
+        assert_eq!(rs.kind, "code");
+        assert_eq!(rs.content_mode, "text");
+    }
+
+    #[test]
+    fn ambiguous_and_unknown_defer_to_sniffing() {
+        assert_eq!(classify("x.dat").content_mode, "unknown");
+        assert_eq!(classify("x.bin").content_mode, "unknown");
+        assert_eq!(classify("x.dmp").content_mode, "unknown");
+        assert_eq!(classify("noextension").kind, "unknown");
+        assert_eq!(classify("x.wibble").content_mode, "unknown");
+        assert_eq!(classify("noextension").type_source, "extension");
+    }
+
+    #[test]
+    fn special_filenames_are_recognised() {
+        assert_eq!(classify("Makefile").kind, "code");
+        assert_eq!(classify("Dockerfile").content_mode, "text");
+        assert_eq!(classify("CMakeLists.txt").format, "cmake");
+        assert_eq!(classify("Cargo.toml").format, "toml");
+        assert_eq!(classify("package.json").format, "json");
+        assert_eq!(classify("requirements.txt").content_mode, "text");
+    }
+
+    #[test]
+    fn classification_ignores_paths_and_case() {
+        let t = classify(r"D:\a\b\MAIN.RS");
+        assert_eq!(t.format, "rust");
+        assert_eq!(t.kind, "code");
+        assert_eq!(classify(r"D:\dir.with.dots\file.tar.gz").format, "gz");
+    }
+
+    #[test]
+    fn sniffing_overrides_a_wrong_or_missing_extension() {
+        let pdf = refine(classify("x.dat"), b"%PDF-1.7\n");
+        assert_eq!(pdf.content_mode, "binary");
+        assert_eq!(pdf.type_source, "magic");
+        assert_eq!(pdf.format, "pdf");
+    }
+
+    #[test]
+    fn utf16_text_is_not_mistaken_for_binary() {
+        // The trap: UTF-16 is full of NUL bytes, so a bare "contains NUL => binary"
+        // check classifies every UTF-16 file wrongly. Windows PowerShell redirection
+        // writes UTF-16LE by default, so this is reachable in normal use.
+        let mut bytes = Vec::new();
+        for u in "hello utf16".encode_utf16() {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        let t = refine(classify("x.dat"), &bytes);
+        assert_eq!(t.content_mode, "text", "UTF-16LE must be text");
+        assert_eq!(encoding_of(&bytes), "utf-16le");
+    }
+
+    #[test]
+    fn bom_detection() {
+        assert_eq!(encoding_of(&[0xEF, 0xBB, 0xBF, b'a']), "utf-8");
+        assert_eq!(encoding_of(&[0xFF, 0xFE, b'a', 0]), "utf-16le");
+        assert_eq!(encoding_of(&[0xFE, 0xFF, 0, b'a']), "utf-16be");
+        assert_eq!(encoding_of(&[0xFF, 0xFE, 0, 0]), "utf-32le");
+    }
+
+    #[test]
+    fn preview_decoding_matches_the_encoding() {
+        let mut bytes = Vec::new();
+        for u in "a\r\nb".encode_utf16() {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        assert_eq!(decode_text(&bytes), "a\r\nb");
+        // a UTF-8 BOM must not leak into the preview
+        assert_eq!(decode_text(b"\xEF\xBB\xBFplain"), "plain");
+        assert_eq!(decode_text(b"plain ascii"), "plain ascii");
+    }
+
+    #[test]
+    fn real_binaries_are_recognised_by_magic() {
+        assert_eq!(
+            refine(classify("x.dat"), &[0x89, b'P', b'N', b'G', 0, 0]).content_mode,
+            "binary"
+        );
+        assert_eq!(refine(classify("x.dat"), b"MZ\x90\x00").format, "exe");
+        assert_eq!(refine(classify("x.dat"), &[0x1F, 0x8B, 0x08]).format, "gz");
+        assert_eq!(refine(classify("x.dat"), b"PK\x03\x04").format, "zip");
+        assert_eq!(
+            refine(classify("x.dat"), b"RIFF\x00\x00\x00\x00WAVE").format,
+            "wav"
+        );
+    }
+
+    #[test]
+    fn plain_text_without_an_extension_is_text() {
+        let t = refine(classify("noext"), b"hello world\nsecond line\n");
+        assert_eq!(t.content_mode, "text");
+        assert_eq!(t.type_source, "heuristic");
+    }
+
+    #[test]
+    fn control_heavy_payloads_are_binary() {
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(512).collect();
+        assert_eq!(refine(classify("x.dat"), &bytes).content_mode, "binary");
+    }
+
+    #[test]
+    fn empty_input_does_not_panic() {
+        let t = refine(classify("x.dat"), &[]);
+        assert_eq!(t.content_mode, "unknown");
+    }
+}

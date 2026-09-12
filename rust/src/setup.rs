@@ -15,7 +15,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const DSH_CLIENT: &str = "@deepseek-ai/dsh-mcp-client";
-const DEFAULT_NAME: &str = "everything";
+/// The registered server name. Deliberately not `everything`: that is a word the
+/// model meets constantly in ordinary prose ("search everything", "everything in
+/// this folder"), while the client prefixes every tool id with it. The MCP tool
+/// names are already `everything_*`, so this keeps the whole surface saying the
+/// same thing.
+const DEFAULT_NAME: &str = "everything-search";
 
 const USAGE: &str = "\
 everything-search-mcp config [options]      print or apply MCP client configuration
@@ -35,7 +40,8 @@ Options
   --target <t>          target name, repeatable or comma separated
   --file <path>         use this file instead of the target's own; with no
                         --target the format is inferred from the extension
-  --name <server>       name to register the server under (default: everything)
+  --name <server>       name to register the server under
+                        (default: everything-search)
   --http-url <url>      pin EVERYTHING_HTTP_URL (the default is already
                         http://127.0.0.1:23333, so this is rarely needed)
   --timeout <seconds>   pin EVERYTHING_TIMEOUT (default 30)

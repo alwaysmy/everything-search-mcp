@@ -28,6 +28,7 @@ Targets - default is every target whose config file already exists on this machi
   gemini          Gemini CLI         %USERPROFILE%\\.gemini\\settings.json
   cursor          Cursor             %USERPROFILE%\\.cursor\\mcp.json
   vscode          VS Code            %APPDATA%\\Code\\User\\mcp.json
+  opencode        opencode           %USERPROFILE%\\.config\\opencode\\opencode.json
   json            no file - just print a generic mcpServers block
 
 Options
@@ -41,6 +42,9 @@ Options
   --max-results-cap <n> pin EVERYTHING_MAX_RESULTS_CAP (default 1000)
   --write               apply the change; every existing file is backed up first.
                         Without it nothing is touched and the snippet is printed
+  --remove              delete this server's entry instead of adding it, and
+                        back the file up first. Use it when the server name
+                        changes so a client cannot end up with both
   --no-check            skip the liveness probe of the Everything HTTP server
   --json                machine readable report instead of prose
 
@@ -58,6 +62,10 @@ enum Kind {
     JsonPlain,
     /// VS Code user `mcp.json`, which nests under `servers`.
     VsCode,
+    /// opencode `opencode.json`, which nests under `mcp` and spells a local
+    /// server quite differently: `type: local`, the command as an array, and
+    /// `environment` instead of `env`.
+    OpenCode,
     /// Codex CLI `config.toml`.
     Codex,
     /// No config file at all; the snippet goes to stdout.
@@ -79,6 +87,7 @@ struct Opts {
     name: String,
     env: Vec<(String, String)>,
     write: bool,
+    remove: bool,
     check: bool,
     json: bool,
 }
@@ -126,6 +135,12 @@ pub fn dispatch(rest: &[String]) -> i32 {
                 Ok(())
             }),
             "--write" => {
+                opts.write = true;
+                i += 1;
+                Ok(())
+            }
+            "--remove" => {
+                opts.remove = true;
                 opts.write = true;
                 i += 1;
                 Ok(())
@@ -241,6 +256,13 @@ fn all_targets() -> Vec<Target> {
             note: "run 'Developer: Reload Window'",
         },
         Target {
+            id: "opencode",
+            label: "opencode",
+            file: Some(home.join(".config").join("opencode").join("opencode.json")),
+            kind: Kind::OpenCode,
+            note: "restart opencode",
+        },
+        Target {
             id: "json",
             label: "generic mcpServers block",
             file: None,
@@ -259,6 +281,8 @@ fn infer_kind(file: &Path) -> Kind {
         Kind::Dsh
     } else if n.ends_with(".toml") {
         Kind::Codex
+    } else if n == "opencode.json" {
+        Kind::OpenCode
     } else {
         Kind::JsonPlain
     }
@@ -339,7 +363,12 @@ fn run(opts: &Opts, exe: &str) -> i32 {
     for &t in &selected {
         let snippet = render(t, exe, &opts.name, &opts.env);
         let file = opts.file.clone().or_else(|| t.file.clone());
-        let outcome = if opts.write {
+        let outcome = if opts.remove {
+            match file.clone() {
+                None => Err("this target has no config file".to_string()),
+                Some(f) => remove(t, &f, &opts.name),
+            }
+        } else if opts.write {
             match file.clone() {
                 None => Err("this target has no config file; copy the snippet by hand".to_string()),
                 Some(f) => apply(t, &f, exe, &opts.name, &opts.env),
@@ -398,7 +427,33 @@ fn render(t: &Target, exe: &str, name: &str, env: &[(String, String)]) -> String
     }
 }
 
+fn env_object(env: &[(String, String)]) -> Value {
+    let mut e = Map::new();
+    for (k, v) in env {
+        e.insert(k.clone(), json!(v));
+    }
+    Value::Object(e)
+}
+
+fn container_of(kind: Kind) -> &'static str {
+    match kind {
+        Kind::VsCode => "servers",
+        Kind::OpenCode => "mcp",
+        _ => "mcpServers",
+    }
+}
+
 fn entry_json(kind: Kind, exe: &str, env: &[(String, String)]) -> Value {
+    if kind == Kind::OpenCode {
+        let mut m = Map::new();
+        m.insert("command".into(), json!([exe]));
+        m.insert("enabled".into(), json!(true));
+        m.insert("type".into(), json!("local"));
+        if !env.is_empty() {
+            m.insert("environment".into(), env_object(env));
+        }
+        return Value::Object(m);
+    }
     let mut m = Map::new();
     if matches!(kind, Kind::JsonStdio | Kind::VsCode) {
         m.insert("type".into(), json!("stdio"));
@@ -406,17 +461,13 @@ fn entry_json(kind: Kind, exe: &str, env: &[(String, String)]) -> Value {
     m.insert("command".into(), json!(exe));
     m.insert("args".into(), json!([]));
     if !env.is_empty() {
-        let mut e = Map::new();
-        for (k, v) in env {
-            e.insert(k.clone(), json!(v));
-        }
-        m.insert("env".into(), Value::Object(e));
+        m.insert("env".into(), env_object(env));
     }
     Value::Object(m)
 }
 
 fn json_block(kind: Kind, exe: &str, name: &str, env: &[(String, String)]) -> String {
-    let container = if kind == Kind::VsCode { "servers" } else { "mcpServers" };
+    let container = container_of(kind);
     let mut inner = Map::new();
     inner.insert(name.to_string(), entry_json(kind, exe, env));
     let mut root = Map::new();
@@ -465,6 +516,7 @@ enum Report {
     Printed,
     Created,
     Updated(Option<PathBuf>),
+    Removed(Option<PathBuf>),
     Unchanged,
     Failed(String),
 }
@@ -475,6 +527,7 @@ impl Report {
             Report::Printed => "printed",
             Report::Created => "created",
             Report::Updated(_) => "updated",
+            Report::Removed(_) => "removed",
             Report::Unchanged => "unchanged",
             Report::Failed(_) => "FAILED",
         }
@@ -482,7 +535,7 @@ impl Report {
 
     fn backup(&self) -> Option<&Path> {
         match self {
-            Report::Updated(b) => b.as_deref(),
+            Report::Updated(b) | Report::Removed(b) => b.as_deref(),
             _ => None,
         }
     }
@@ -493,6 +546,114 @@ impl Report {
             _ => None,
         }
     }
+}
+
+fn remove(t: &Target, file: &Path, name: &str) -> Result<Report, String> {
+    if !file.exists() {
+        return Ok(Report::Unchanged);
+    }
+    let container = container_of(t.kind);
+    let old = read_or_empty(file)?;
+    let new = match t.kind {
+        Kind::Dsh => {
+            let lines: Vec<&str> = old.lines().collect();
+            match dsh_range(&lines, name) {
+                Some((start, cut)) => splice(&lines, start, cut, None),
+                None => return Ok(Report::Unchanged),
+            }
+        }
+        Kind::Codex => {
+            let lines: Vec<&str> = old.lines().collect();
+            match codex_range(&lines, name) {
+                Some((start, end)) => splice(&lines, start, end, None),
+                None => return Ok(Report::Unchanged),
+            }
+        }
+        Kind::Stdout => return Err("this target has no config file".into()),
+        _ => {
+            let (bom, body) = split_bom(&old);
+            let mut root: Value = serde_json::from_str(body)
+                .map_err(|e| format!("{} is not valid JSON, leaving it alone: {e}", file.display()))?;
+            let present = root
+                .get_mut(container)
+                .and_then(|c| c.as_object_mut())
+                .map(|m| m.remove(name).is_some())
+                .unwrap_or(false);
+            if !present {
+                return Ok(Report::Unchanged);
+            }
+            format!(
+                "{bom}{}\n",
+                serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?
+            )
+        }
+    };
+    let backup = Some(backup(file)?);
+    write_file(file, &new)?;
+    Ok(Report::Removed(backup))
+}
+
+fn split_bom(s: &str) -> (&str, &str) {
+    match s.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", s),
+    }
+}
+
+/// Join `lines` back into text, replacing `[start, end)` with `insert`.
+fn splice(lines: &[&str], start: usize, end: usize, insert: Option<&str>) -> String {
+    let mut out = String::new();
+    for l in &lines[..start] {
+        out.push_str(l);
+        out.push('\n');
+    }
+    if let Some(s) = insert {
+        out.push_str(s);
+    }
+    for l in &lines[end..] {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// The line range a DSH loader entry occupies: from its `- id:` line to the last
+/// line that is indented deeper, so the blank line before the next top-level
+/// entry is left alone.
+fn dsh_range(lines: &[&str], name: &str) -> Option<(usize, usize)> {
+    let own = [format!("- id: mcp-{name}"), format!("- id: {name}")];
+    let start = lines.iter().position(|l| own.iter().any(|o| o.as_str() == l.trim()))?;
+    let indent = lines[start].len() - lines[start].trim_start().len();
+    let mut cut = start + 1;
+    let mut scan = start + 1;
+    while scan < lines.len() {
+        let l = lines[scan];
+        if !l.trim().is_empty() {
+            if l.len() - l.trim_start().len() <= indent {
+                break;
+            }
+            cut = scan + 1;
+        }
+        scan += 1;
+    }
+    Some((start, cut))
+}
+
+/// The line range a Codex `[mcp_servers.<name>]` table occupies, including its
+/// `.env` sub-table: in TOML that is everything up to the next table header.
+fn codex_range(lines: &[&str], name: &str) -> Option<(usize, usize)> {
+    let head = format!("[mcp_servers.{name}]");
+    let env_head = format!("[mcp_servers.{name}.env]");
+    let start = lines.iter().position(|l| l.trim() == head || l.trim() == env_head)?;
+    let mut end = start + 1;
+    while end < lines.len() {
+        let t = lines[end].trim();
+        if t.starts_with('[') && t != head && t != env_head {
+            break;
+        }
+        end += 1;
+    }
+    Some((start, end))
 }
 
 fn apply(
@@ -547,7 +708,20 @@ fn write_file(file: &Path, text: &str) -> Result<(), String> {
 fn backup(file: &Path) -> Result<PathBuf, String> {
     let mut name = file.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".bak-{}", utc_stamp()));
-    let dest = file.with_file_name(name);
+    let mut dest = file.with_file_name(name);
+    // The stamp has one-second resolution, and a write followed by a remove in
+    // one script lands in the same second. Never let the second backup overwrite
+    // the first: the first is the state the user most likely wants back.
+    let mut n = 2;
+    while dest.exists() {
+        let mut name = file.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".bak-{}-{n}", utc_stamp()));
+        dest = file.with_file_name(name);
+        n += 1;
+        if n > 999 {
+            return Err(format!("cannot find a free backup name for {}", file.display()));
+        }
+    }
     fs::copy(file, &dest).map_err(|e| format!("cannot back up {}: {e}", file.display()))?;
     Ok(dest)
 }
@@ -580,15 +754,12 @@ fn apply_json(
     name: &str,
     env: &[(String, String)],
 ) -> Result<Report, String> {
-    let container = if kind == Kind::VsCode { "servers" } else { "mcpServers" };
+    let container = container_of(kind);
     let old = read_or_empty(file)?;
     let existed = file.exists();
     // Windows tools happily write a UTF-8 BOM; `serde_json` would reject it, so
     // it is peeled off here and put back on the way out.
-    let (bom, body) = match old.strip_prefix('\u{feff}') {
-        Some(rest) => ("\u{feff}", rest),
-        None => ("", old.as_str()),
-    };
+    let (bom, body) = split_bom(&old);
     let mut root: Value = if body.trim().is_empty() {
         json!({})
     } else {
@@ -632,38 +803,10 @@ fn dsh_replacement(
 ) -> Result<String, String> {
     let text = read_or_empty(file)?;
     let lines: Vec<&str> = text.lines().collect();
-    let own = [format!("- id: mcp-{name}"), format!("- id: {name}")];
-    let found = lines
-        .iter()
-        .position(|l| own.iter().any(|o| o.as_str() == l.trim()));
-    if let Some(start) = found {
+    if let Some((start, cut)) = dsh_range(&lines, name) {
         let indent = lines[start].len() - lines[start].trim_start().len();
-        // Cut at the last line that is genuinely part of the entry, so the blank
-        // line separating it from the next top-level entry survives.
-        let mut cut = start + 1;
-        let mut scan = start + 1;
-        while scan < lines.len() {
-            let l = lines[scan];
-            if !l.trim().is_empty() {
-                if l.len() - l.trim_start().len() <= indent {
-                    break;
-                }
-                cut = scan + 1;
-            }
-            scan += 1;
-        }
         let block = dsh_block(exe, name, env, &" ".repeat(indent));
-        let mut out = String::new();
-        for l in &lines[..start] {
-            out.push_str(l);
-            out.push('\n');
-        }
-        out.push_str(&block);
-        for l in &lines[cut..] {
-            out.push_str(l);
-            out.push('\n');
-        }
-        return Ok(out);
+        return Ok(splice(&lines, start, cut, Some(&block)));
     }
     let mut out = text;
     if !out.is_empty() {
@@ -687,35 +830,11 @@ fn codex_replacement(
 ) -> Result<String, String> {
     let text = read_or_empty(file)?;
     let lines: Vec<&str> = text.lines().collect();
-    let head = format!("[mcp_servers.{name}]");
-    let env_head = format!("[mcp_servers.{name}.env]");
     let block = codex_block(exe, name, env);
-    let found = lines.iter().position(|l| l.trim() == head || l.trim() == env_head);
-    if let Some(start) = found {
-        // In TOML every line up to the next table header belongs to this table,
-        // so the replacement is the run of lines before that header.
-        let mut end = start + 1;
-        while end < lines.len() {
-            let t = lines[end].trim();
-            if t.starts_with('[') && t != head && t != env_head {
-                break;
-            }
-            end += 1;
-        }
-        let mut out = String::new();
-        for l in &lines[..start] {
-            out.push_str(l);
-            out.push('\n');
-        }
-        out.push_str(&block);
-        if end < lines.len() {
-            out.push('\n');
-        }
-        for l in &lines[end..] {
-            out.push_str(l);
-            out.push('\n');
-        }
-        return Ok(out);
+    if let Some((start, end)) = codex_range(&lines, name) {
+        // Keep one blank line between the replaced table and whatever follows it.
+        let insert = if end < lines.len() { format!("{block}\n") } else { block };
+        return Ok(splice(&lines, start, end, Some(&insert)));
     }
     let mut out = text;
     if !out.is_empty() {
@@ -753,7 +872,13 @@ fn print_prose(
     }
     println!(
         "  mode        {}",
-        if opts.write { "write" } else { "print only (add --write to apply)" }
+        if opts.remove {
+            "remove"
+        } else if opts.write {
+            "write"
+        } else {
+            "print only (add --write to apply)"
+        }
     );
     for row in rows {
         let t = row.target;

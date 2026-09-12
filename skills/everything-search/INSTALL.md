@@ -77,6 +77,12 @@ Everything → **工具 → 选项 → HTTP 服务器** → 勾选「启用 HTTP
 ... config --target vscode --write
 ```
 
+删掉某一条（改了 server 名时用它，避免新旧两条同时存在）：
+
+```powershell
+... config --target opencode --name 旧名字 --remove
+```
+
 写到别处 / 换个 server 名：
 
 ```powershell
@@ -174,6 +180,27 @@ VS Code 用 `servers` 而不是 `mcpServers`：
   }
 }
 ```
+
+### opencode — `%USERPROFILE%\.config\opencode\opencode.json`
+
+opencode 的写法又不一样：`command` 是**数组**、类型叫 `local`、环境变量键叫
+`environment`，而且容器键是 `mcp`：
+
+```json
+{
+  "mcp": {
+    "everything": {
+      "type": "local",
+      "command": ["C:\\Users\\<用户名>\\.agents\\skills\\everything-search\\bin\\everything-search-mcp.exe"],
+      "enabled": true
+    }
+  }
+}
+```
+
+> 注意 **server 名不要重复**。如果之前叫 `everything-search`、现在叫 `everything`，
+> 先用 `config --target opencode --name everything-search --remove` 把旧条目删掉，
+> 否则 opencode 会把同一套工具注册两遍。
 
 ## 4. 验证
 

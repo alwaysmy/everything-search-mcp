@@ -527,10 +527,25 @@ fn format_items(items: &[Item], offset: usize, total: u64) -> String {
         if let Some(m) = &it.modified {
             meta.push(m.clone());
         }
+        // The structured channel always carries the full classification. The text
+        // channel flags only what changes what a reader should do - not plain text,
+        // or not determinable from the name - because some clients forward only the
+        // text, and annotating every ordinary source file would just cost tokens.
+        let mut note = String::new();
+        if !it.is_dir {
+            let t = filetype::classify(&it.name);
+            if t.content_mode != "text" {
+                note = format!("  <{}/{}>", t.kind, t.content_mode);
+            }
+        }
         if meta.is_empty() {
-            out.push_str(&format!("  [{tag}] {}\n", it.full_path()));
+            out.push_str(&format!("  [{tag}] {}{note}\n", it.full_path()));
         } else {
-            out.push_str(&format!("  [{tag}] {}  ({})\n", it.full_path(), meta.join(", ")));
+            out.push_str(&format!(
+                "  [{tag}] {}  ({}){note}\n",
+                it.full_path(),
+                meta.join(", ")
+            ));
         }
     }
     out.push_str(&format!(

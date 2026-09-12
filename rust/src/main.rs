@@ -5,6 +5,7 @@
 //! no Python runtime.
 
 mod everything;
+mod filetype;
 mod jsonrpc;
 mod tools;
 

@@ -123,9 +123,42 @@ Every search result reports the exact Everything expression that ran, after
 
 `count` / `total` are **exact** — Everything reports the true total independently
 of how many rows are fetched, so `count_stats` asks for a single row when size is
-not needed. `total_size` and the per-extension breakdown are **sampled**: the HTTP
-API has no aggregate, so they are extrapolated from the fetched sample and
-reported as `"sampled"` rather than passed off as exact.
+not needed.
+
+`total_size` is **not estimated**. File sizes are heavily skewed and a top-N slice
+is not a random sample, so extrapolating from it produced figures that
+contradicted each other (23.6 GB for a set whose PDF members alone came to 84 GB).
+A wrong number is worse than no number, so without `exact_size` the field is
+omitted and `total_size_accuracy` is `"unavailable"` with a note saying why.
+
+Pass **`exact_size: true`** to sum every match instead: one paged pass, capped at
+200000 rows, and above the cap it says so rather than guessing. Summing also makes
+the per-extension breakdown exact, and it is affordable — 185,892 `.txt` files
+summed in ~620 ms, which is why the SDK3 aggregate route was not taken.
+
+### File type classification, in two levels
+
+`everything_search` classifies from the **name only and never opens a file**:
+reading a header per result would turn one index lookup into N filesystem
+operations, which behaves completely differently on spinning disks, SMB shares,
+cloud placeholders and machines with aggressive antivirus. Each result carries:
+
+```json
+{"kind": "image", "content_mode": "text", "format": "svg", "type_source": "extension"}
+```
+
+`kind` is deliberately the same vocabulary as the `category` parameter, so a
+`kind` can be fed straight back into `category`. `content_mode` is a separate axis
+on purpose: `.svg` is image **and** text, `.docx` is document and binary, `.rs` is
+code and text.
+
+`everything_file_details` is the level that may read, and only when the extension
+cannot tell — a missing, unknown or ambiguous (`.dat`, `.bin`) extension. It reads
+16 KB and resolves in the order BOM → magic number → heuristic, so UTF-16 text
+(which is full of NUL bytes) is not misread as binary. The preview is a **triage
+preview**: it exists to help decide whether a file is worth reading, text files
+only, and it is not a substitute for the agent's own file-reading tool.
+
 
 ### Multi-probe
 

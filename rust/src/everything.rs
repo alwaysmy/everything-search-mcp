@@ -38,35 +38,43 @@ pub const SORT_NAMES: &[&str] = &[
     "date-created", "date-created-asc", "date-created-desc", "extension",
 ];
 
+/// Category table: the single source of truth for the `category` parameter, the
+/// published enum, and the `kind` field on results (which is deliberately the same
+/// vocabulary, so a `kind` can be fed straight back into `category`).
+pub const FILE_TYPES: &[(&str, &str)] = &[
+    ("audio", "ext:mp3;wav;flac;aac;ogg;wma;m4a;opus;aiff;alac"),
+    ("video", "ext:mp4;avi;mkv;mov;wmv;flv;webm;m4v;mpeg;mpg;3gp;ts"),
+    ("image", "ext:jpg;jpeg;png;gif;bmp;svg;webp;tiff;tif;ico;raw;heic;heif;avif;psd"),
+    (
+        "document",
+        "ext:pdf;doc;docx;xls;xlsx;ppt;pptx;odt;ods;odp;rtf;txt;md;epub;pages;numbers;key",
+    ),
+    (
+        "code",
+        "ext:py;js;ts;jsx;tsx;c;cpp;h;hpp;cs;java;go;rs;rb;php;swift;kt;scala;r;lua;sh;bash;\
+         ps1;bat;cmd;sql;html;css;scss;sass;less;vue;svelte;dart;zig;nim;hx;ex;exs;erl;hs;ml;\
+         fs;clj;lisp;asm;toml;yaml;yml;json;xml;ini;cfg;conf;env;dockerfile;makefile;cmake;\
+         gradle;sbt;proto;graphql;tf;hcl",
+    ),
+    ("archive", "ext:zip;rar;7z;tar;gz;bz2;xz;tgz;zst;lz4;cab;iso;dmg"),
+    ("executable", "ext:exe;msi;dll;sys;com;scr;appx;msix"),
+    ("font", "ext:ttf;otf;woff;woff2;eot;fon"),
+    ("3d", "ext:obj;fbx;stl;blend;dae;3ds;gltf;glb;usd;usda;usdz;step;iges"),
+    (
+        "data",
+        "ext:csv;tsv;json;jsonl;ndjson;xml;sqlite;db;mdb;accdb;parquet;arrow;avro;hdf5;feather",
+    ),
+];
+
 /// `file_type` category -> `ext:` clause (mirrors the Python server exactly).
 pub fn file_type_query(kind: &str) -> Option<&'static str> {
-    Some(match kind {
-        "audio" => "ext:mp3;wav;flac;aac;ogg;wma;m4a;opus;aiff;alac",
-        "video" => "ext:mp4;avi;mkv;mov;wmv;flv;webm;m4v;mpeg;mpg;3gp;ts",
-        "image" => "ext:jpg;jpeg;png;gif;bmp;svg;webp;tiff;tif;ico;raw;heic;heif;avif;psd",
-        "document" => {
-            "ext:pdf;doc;docx;xls;xlsx;ppt;pptx;odt;ods;odp;rtf;txt;md;epub;pages;numbers;key"
-        }
-        "code" => {
-            "ext:py;js;ts;jsx;tsx;c;cpp;h;hpp;cs;java;go;rs;rb;php;swift;kt;scala;r;lua;sh;bash;\
-             ps1;bat;cmd;sql;html;css;scss;sass;less;vue;svelte;dart;zig;nim;hx;ex;exs;erl;hs;ml;\
-             fs;clj;lisp;asm;toml;yaml;yml;json;xml;ini;cfg;conf;env;dockerfile;makefile;cmake;\
-             gradle;sbt;proto;graphql;tf;hcl"
-        }
-        "archive" => "ext:zip;rar;7z;tar;gz;bz2;xz;tgz;zst;lz4;cab;iso;dmg",
-        "executable" => "ext:exe;msi;dll;sys;com;scr;appx;msix",
-        "font" => "ext:ttf;otf;woff;woff2;eot;fon",
-        "3d" => "ext:obj;fbx;stl;blend;dae;3ds;gltf;glb;usd;usda;usdz;step;iges",
-        "data" => {
-            "ext:csv;tsv;json;jsonl;ndjson;xml;sqlite;db;mdb;accdb;parquet;arrow;avro;hdf5;feather"
-        }
-        _ => return None,
-    })
+    FILE_TYPES.iter().find(|(k, _)| *k == kind).map(|(_, v)| *v)
 }
 
-pub const FILE_TYPE_NAMES: &[&str] = &[
-    "audio", "video", "image", "document", "code", "archive", "executable", "font", "3d", "data",
-];
+/// Category names in table order, so the published enum cannot drift from the table.
+pub fn file_type_names() -> Vec<&'static str> {
+    FILE_TYPES.iter().map(|(k, _)| *k).collect()
+}
 
 /// Accepted `period` values for `everything_find_recent` -> Everything `dm:` syntax.
 pub fn period_query(period: &str) -> Option<&'static str> {

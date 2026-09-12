@@ -261,7 +261,20 @@ pub struct Query<'a> {
     pub case: bool,
     pub whole_word: bool,
     pub regex: bool,
+    pub match_path: bool,
     pub path: Option<&'a str>,
+}
+
+/// Reject unknown sort names instead of silently falling back to the default.
+pub fn validate_sort(sort: &str) -> Result<(), String> {
+    if SORT_NAMES.contains(&sort) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid sort '{sort}'. Valid: {}",
+            SORT_NAMES.join(", ")
+        ))
+    }
 }
 
 impl Client {
@@ -276,13 +289,22 @@ impl Client {
     /// One HTTP/1.0 request on a fresh loopback connection (~0.7 ms measured).
     pub fn query(&self, q: &Query) -> Result<RawResponse, String> {
         let mut search = String::new();
-        // Everything's HTTP API ignores `path=`/`folder=`, so scope by prefixing a
-        // quoted literal path to the search string (verified working).
+        // Everything's HTTP API ignores its `path=`/`folder=` parameters, so the
+        // directory is expressed with the `path:` search FUNCTION. It has to be a
+        // function rather than a quoted literal: under regex matching the whole
+        // search text becomes the pattern, and an injected literal path would be
+        // read as part of that pattern (measured: 0 results).
         if let Some(p) = q.path.filter(|p| !p.trim().is_empty()) {
             let p = p.trim().trim_end_matches(|c| c == '\\' || c == '/');
-            search.push('"');
+            search.push_str("path:\"");
             search.push_str(p);
             search.push_str("\" ");
+        }
+        // Same reason: `regex:` is used as a function rather than the HTTP regex
+        // flag, so that it composes with the `path:` function above (measured:
+        // `path:"..." regex:^main\.rs$` returns exactly the expected hit).
+        if q.regex {
+            search.push_str("regex:");
         }
         search.push_str(q.search);
 
@@ -300,8 +322,14 @@ impl Client {
         if q.whole_word {
             url.push_str("&wholeword=1");
         }
-        if q.regex {
-            url.push_str("&regex=1");
+        // `regex` is deliberately NOT sent as `&regex=1`; see the `regex:` function
+        // above. Sending both would double-apply the pattern.
+        //
+        // `p=1` is the switch that makes the term match the full path instead of
+        // the filename. It is absent from Everything's HTTP documentation; verified
+        // live (274 -> 25686 results for a term that only occurs in paths).
+        if q.match_path {
+            url.push_str("&p=1");
         }
 
         let body = self.get(&url)?;

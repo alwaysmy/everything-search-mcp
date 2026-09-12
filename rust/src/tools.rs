@@ -190,13 +190,9 @@ impl Tools {
         let max = cap(self.client.config(), u(args, "max_results", 50));
         let offset = u(args, "offset", 0);
         let sort = s_or(args, "sort", "date-modified-desc");
+        everything::validate_sort(&sort)?;
         let path = s(args, "path");
         let include_total = b(args, "include_total", false);
-
-        if b(args, "match_path", false) {
-            // Everything's HTTP API has no match-path switch; the equivalent is the
-            // `path:` search function, which callers can write directly in `query`.
-        }
 
         let resp = self.run(&Query {
             search: &query,
@@ -207,6 +203,7 @@ impl Tools {
             case: b(args, "match_case", false),
             whole_word: b(args, "match_whole_word", false),
             regex: b(args, "match_regex", false),
+            match_path: b(args, "match_path", false),
             path: if path.trim().is_empty() { None } else { Some(path.as_str()) },
         })?;
 
@@ -235,6 +232,7 @@ impl Tools {
         };
         let max = cap(self.client.config(), u(args, "max_results", 50));
         let sort = s_or(args, "sort", "date-modified-desc");
+        everything::validate_sort(&sort)?;
         let path = s(args, "path");
         let resp = self.run(&Query {
             search: &search,
@@ -245,6 +243,7 @@ impl Tools {
             case: false,
             whole_word: false,
             regex: false,
+            match_path: false,
             path: if path.trim().is_empty() { None } else { Some(path.as_str()) },
         })?;
         let label = if extra.trim().is_empty() {
@@ -258,12 +257,18 @@ impl Tools {
 
     fn find_recent(&mut self, args: &Value) -> Result<String, String> {
         let period = s_or(args, "period", "1day");
-        let dm = everything::period_query(&period).ok_or_else(|| {
-            format!(
-                "invalid period '{period}'. Valid values: {} (or raw Everything syntax like 'last2hours')",
-                PERIOD_NAMES.join(", ")
-            )
-        })?;
+        // Accept the raw Everything syntax (`last2hours`, `last30mins`, ...) in
+        // addition to the named values, matching the Python implementation.
+        let dm: String = match everything::period_query(&period) {
+            Some(v) => v.to_string(),
+            None if period.starts_with("last") && period.len() > 4 => period.clone(),
+            None => {
+                return Err(format!(
+                    "invalid period '{period}'. Valid values: {} (or raw Everything syntax like 'last2hours')",
+                    PERIOD_NAMES.join(", ")
+                ))
+            }
+        };
         let max = cap(self.client.config(), u(args, "max_results", 50));
         let path = s(args, "path");
         let path_ref = if path.trim().is_empty() { None } else { Some(path.as_str()) };
@@ -273,7 +278,7 @@ impl Tools {
         let build = |with_time: bool| {
             let mut parts: Vec<String> = Vec::new();
             if with_time {
-                parts.push(dm.to_string());
+                parts.push(dm.clone());
             }
             if !extensions.trim().is_empty() {
                 let list = extensions.replace(',', ";");
@@ -294,6 +299,7 @@ impl Tools {
             case: false,
             whole_word: false,
             regex: false,
+            match_path: false,
             path: path_ref,
         })?;
 
@@ -310,6 +316,7 @@ impl Tools {
                 case: false,
                 whole_word: false,
                 regex: false,
+                match_path: false,
                 path: path_ref,
             })?;
         }
@@ -395,11 +402,14 @@ impl Tools {
         let include_size = b(args, "include_size", true);
         let breakdown = b(args, "breakdown_by_extension", false);
         let sample_sort = s_or(args, "sample_sort", "date-modified-desc");
-        if sample_sort == "name" || sample_sort == "name-desc" {
+        // Only meaningful when we actually sample for the extension breakdown;
+        // without a breakdown this argument is inert, so do not reject it then.
+        if breakdown && (sample_sort == "name" || sample_sort == "name-desc") {
             return Err(
                 "sample_sort 'name' is rejected: file-name sort correlates with extension and biases the sample. Use a date or size sort.".into(),
             );
         }
+        everything::validate_sort(&sample_sort)?;
         let resp = self.run(&Query {
             search: &query,
             count: 500,
@@ -409,6 +419,7 @@ impl Tools {
             case: false,
             whole_word: false,
             regex: false,
+            match_path: false,
             path: if path.trim().is_empty() { None } else { Some(path.as_str()) },
         })?;
 

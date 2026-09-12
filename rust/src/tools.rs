@@ -915,13 +915,17 @@ impl Tools {
                                 // substitute for the agent's own read tool.
                                 match std::fs::read(pathref) {
                                     Ok(bytes) => {
-                                        let lossy = String::from_utf8_lossy(&bytes);
-                                        let mut it = lossy.lines();
+                                        let decoded = filetype::decode_text(&bytes);
+                                        let mut it = decoded.lines();
                                         let lines: Vec<&str> = it.by_ref().take(preview).collect();
                                         let truncated = it.next().is_some();
                                         e["preview"] = json!(lines.join("\n"));
                                         e["preview_bytes"] = json!(bytes.len());
                                         e["preview_truncated"] = json!(truncated);
+                                        let enc = filetype::encoding_of(&bytes);
+                                        if enc != "utf-8" {
+                                            e["encoding"] = json!(enc);
+                                        }
                                         text.push_str("  preview:\n");
                                         for l in &lines {
                                             text.push_str(&format!("    {l}\n"));

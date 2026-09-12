@@ -354,3 +354,53 @@ fn looks_utf16(b: &[u8]) -> bool {
 /// The header size that is enough to sniff reliably, and cheap enough to never
 /// matter.
 pub const SNIFF_BYTES: usize = 16 * 1024;
+
+/// Text encoding implied by a header. Used to decode previews: a UTF-16 file
+/// decoded as UTF-8 renders as text with gaps between every character.
+/// PowerShell's `>` redirection produces UTF-16LE by default, so this is not rare
+/// on Windows.
+pub fn encoding_of(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return "utf-8";
+    }
+    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return "utf-32le";
+    }
+    if bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return "utf-32be";
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return "utf-16le";
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return "utf-16be";
+    }
+    if looks_utf16(bytes) {
+        let n = bytes.len().min(512);
+        let even_nul = (0..n).step_by(2).filter(|i| bytes[*i] == 0).count();
+        let odd_nul = (1..n).step_by(2).filter(|i| bytes[*i] == 0).count();
+        return if odd_nul > even_nul { "utf-16le" } else { "utf-16be" };
+    }
+    "utf-8"
+}
+
+/// Decode a text buffer using the encoding the header implies.
+pub fn decode_text(bytes: &[u8]) -> String {
+    match encoding_of(bytes) {
+        "utf-16le" => String::from_utf16_lossy(
+            &bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        ),
+        "utf-16be" => String::from_utf16_lossy(
+            &bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        ),
+        _ => String::from_utf8_lossy(bytes)
+            .trim_start_matches('\u{feff}')
+            .to_string(),
+    }
+}

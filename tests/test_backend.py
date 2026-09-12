@@ -1,4 +1,4 @@
-"""Tests for everything_mcp.backend."""
+"""Tests for everything_search_mcp.backend."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from everything_mcp.backend import (
+from everything_search_mcp.backend import (
     FILE_TYPES,
     SORT_MAP,
     TIME_PERIODS,
@@ -120,14 +120,14 @@ class TestParsePathsAndStat:
         result = _parse_paths_and_stat("not a path\n12345\nhello world\n")
         assert result == []
 
-    @patch("everything_mcp.backend._stat_to_result")
+    @patch("everything_search_mcp.backend._stat_to_result")
     def test_valid_paths_are_statted(self, mock_stat):
         mock_stat.return_value = SearchResult(path=r"C:\test.txt", name="test.txt")
         result = _parse_paths_and_stat(r"C:\test.txt" + "\n")
         assert len(result) == 1
         mock_stat.assert_called_once_with(r"C:\test.txt")
 
-    @patch("everything_mcp.backend._stat_to_result")
+    @patch("everything_search_mcp.backend._stat_to_result")
     def test_multiple_paths(self, mock_stat):
         mock_stat.side_effect = [
             SearchResult(path=r"C:\a.txt", name="a.txt"),
@@ -136,13 +136,13 @@ class TestParsePathsAndStat:
         result = _parse_paths_and_stat(r"C:\a.txt" + "\n" + r"D:\b.py" + "\n")
         assert len(result) == 2
 
-    @patch("everything_mcp.backend._stat_to_result")
+    @patch("everything_search_mcp.backend._stat_to_result")
     def test_blank_lines_skipped(self, mock_stat):
         mock_stat.return_value = SearchResult(path=r"C:\a.txt", name="a.txt")
         result = _parse_paths_and_stat("\n\n" + r"C:\a.txt" + "\n\n")
         assert len(result) == 1
 
-    @patch("everything_mcp.backend._stat_to_result")
+    @patch("everything_search_mcp.backend._stat_to_result")
     def test_preserves_significant_trailing_whitespace(self, mock_stat):
         path_with_space = r"C:\folder\file.txt "
         mock_stat.return_value = SearchResult(path=path_with_space, name="file.txt ")
@@ -382,7 +382,7 @@ class TestEverythingBackend:
         """Verify the command built by search() includes expected flags."""
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "", 0)
-            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+            with patch("everything_search_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search("*.py", max_results=10, sort="name")
 
             cmd = mock_run.call_args[0][0]
@@ -403,7 +403,7 @@ class TestEverythingBackend:
         backend = EverythingBackend(config_15a)
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "", 0)
-            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+            with patch("everything_search_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search("*.py")
 
             cmd = mock_run.call_args[0][0]
@@ -415,7 +415,7 @@ class TestEverythingBackend:
         """Verify match flags are passed through."""
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "", 0)
-            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+            with patch("everything_search_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search(
                     "test",
                     match_case=True,
@@ -437,7 +437,7 @@ class TestEverythingBackend:
         """match_regex=True keeps the query as one arg (no AND splitting)."""
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "", 0)
-            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+            with patch("everything_search_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search("report 2026", match_regex=True)
             cmd = mock_run.call_args[0][0]
             assert "regex:report 2026" in cmd
@@ -447,7 +447,7 @@ class TestEverythingBackend:
         """regex: prefix in the query is not doubled."""
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "", 0)
-            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+            with patch("everything_search_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search(r"regex:.*\.py$")
             cmd = mock_run.call_args[0][0]
             regex_args = [a for a in cmd if a.startswith("regex:")]
@@ -477,7 +477,7 @@ class TestEverythingBackend:
         """Multi-term queries must become separate argv elements (AND logic)."""
         with patch.object(backend, "_run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = ("", "", 0)
-            with patch("everything_mcp.backend._parse_paths_and_stat", return_value=[]):
+            with patch("everything_search_mcp.backend._parse_paths_and_stat", return_value=[]):
                 await backend.search("dm:today ext:md")
             cmd = mock_run.call_args[0][0]
             assert "dm:today" in cmd
@@ -557,7 +557,7 @@ class TestEverythingBackend:
     async def test_run_timeout_raises(self, backend):
         """_run surfaces a friendly error when es.exe times out."""
         with patch(
-            "everything_mcp.backend.asyncio.create_subprocess_exec",
+            "everything_search_mcp.backend.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
         ) as mock_create:
             mock_proc = mock_create.return_value
@@ -571,7 +571,7 @@ class TestEverythingBackend:
     async def test_run_file_not_found_raises(self, backend):
         """_run surfaces a clear error when es.exe itself is missing."""
         with patch(
-            "everything_mcp.backend.asyncio.create_subprocess_exec",
+            "everything_search_mcp.backend.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
         ) as mock_create:
             mock_create.side_effect = FileNotFoundError

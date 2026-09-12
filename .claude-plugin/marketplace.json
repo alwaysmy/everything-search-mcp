@@ -1,11 +1,11 @@
 {
-  "name": "everything-mcp",
+  "name": "everything-search-mcp",
   "owner": {
     "name": "alwaysmy"
   },
   "plugins": [
     {
-      "name": "everything-mcp",
+      "name": "everything-search-mcp",
       "source": "./",
       "description": "Lightning-fast Windows file search for AI agents via voidtools Everything - 5 MCP tools for search, type filtering, recent files, file details, and count/size stats",
       "version": "1.1.0",

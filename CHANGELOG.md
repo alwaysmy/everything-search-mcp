@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **everything-mcp** will be documented in this file.
+All notable changes to **everything-search-mcp** will be documented in this file.
 
 ## [1.1.0] - 2026-09-04
 
@@ -16,6 +16,15 @@ All notable changes to **everything-mcp** will be documented in this file.
 - `mcp` dependency constrained to `>=1.14.0,<3.0.0`.
 - Sort validation moved from pydantic `field_validator`s to `_validate_sort`, called at tool invocation; `sample_sort` shares the same validator.
 - Bundled skill documents a no-tool fallback (`es.exe` CLI) and the `EVERYTHING_ES_PATH` override for custom install locations.
+- Bundled skill now documents the full tool reference: `file_type` categories, the accepted `sort` values, the full `period` list, and every per-tool argument, generated from `SORT_MAP`, `FILE_TYPES` and `TIME_PERIODS`.
+- Renamed the project to `everything-search-mcp` - repository, distribution name, import package (`everything_search_mcp`) and CLI command. `EVERYTHING_*` environment variables are unchanged, since they refer to voidtools Everything rather than to this package.
+- This fork is now detached from `elis132/everything-mcp`: the upstream remote was removed and upstream changes are no longer tracked or merged. The last absorbed upstream commit is pinned to the local tag `upstream-base-elis132`.
+- `pytest` is configured with `pythonpath = src` so it tests the working tree instead of a stale `everything-search-mcp` installed in site-packages.
+
+### Removed
+
+- Tag-triggered release pipeline (`.github/workflows/release.yml`). This fork is not published to PyPI or to the MCP registry, so pushing a version tag no longer triggers a release, a PyPI upload, or a registry publish.
+- PyPI badges and PyPI/`uvx` install instructions from the README; installation now documents `uv tool install --from git+...` and a local checkout.
 
 ## [1.0.6] - 2026-07-02
 
@@ -37,7 +46,7 @@ All notable changes to **everything-mcp** will be documented in this file.
 
 ### Added
 
-- Claude Code plugin marketplace support: `/plugin marketplace add elis132/everything-mcp`, then `/plugin install everything-mcp@everything-mcp`.
+- Claude Code plugin marketplace support: `/plugin marketplace add elis132/everything-mcp`, then `/plugin install everything-search-mcp@everything-search-mcp`.
 - Bundled `everything-search` skill for Claude Code: query syntax reference, tool selection guidance, and common pitfalls.
 - CI workflow (pytest on Ubuntu/Windows for Python 3.10/3.13, ruff check/format) and `.gitattributes` line-ending normalization.
 - Release pipeline triggered by version tags: builds, creates the GitHub release, publishes to PyPI (trusted publishing), and publishes to the official MCP registry (`io.github.elis132/everything-mcp`).

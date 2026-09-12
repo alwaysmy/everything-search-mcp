@@ -1,5 +1,5 @@
 {
-  "name": "everything-mcp",
+  "name": "everything-search-mcp",
   "description": "Lightning-fast Windows file search for AI agents via voidtools Everything - 5 MCP tools for search, type filtering, recent files, file details, and count/size stats",
   "version": "1.1.0",
   "author": {
@@ -12,7 +12,7 @@
   "mcpServers": {
     "everything": {
       "command": "uvx",
-      "args": ["everything-mcp"]
+      "args": ["--from", "git+https://github.com/alwaysmy/everything-search-mcp", "everything-search-mcp"]
     }
   }
 }

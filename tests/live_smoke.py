@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from everything_mcp.backend import EverythingBackend
-from everything_mcp.config import EverythingConfig
+from everything_search_mcp.backend import EverythingBackend
+from everything_search_mcp.config import EverythingConfig
 
 MULTI_TERM_QUERY = r"ext:exe path:C:\Windows"
 

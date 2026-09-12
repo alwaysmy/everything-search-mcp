@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - exercised only on mcp 1.x
 
 from pydantic import Field
 
-from everything_mcp.backend import (
+from everything_search_mcp.backend import (
     FILE_TYPES,
     SORT_MAP,
     TIME_PERIODS,
@@ -40,7 +40,7 @@ from everything_mcp.backend import (
     build_type_query,
     human_size,
 )
-from everything_mcp.config import EverythingConfig
+from everything_search_mcp.config import EverythingConfig
 
 # ── Logging (stderr - required for stdio MCP transport) ──────────────────
 
@@ -49,7 +49,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     stream=sys.stderr,
 )
-logger = logging.getLogger("everything_mcp")
+logger = logging.getLogger("everything_search_mcp")
 
 # ── Globals (initialised during lifespan) ─────────────────────────────────
 
@@ -82,7 +82,7 @@ async def lifespan(server):
 
 # ── Server instance ───────────────────────────────────────────────────────
 
-mcp = MCPServer("everything_mcp", lifespan=lifespan)
+mcp = MCPServer("everything_search_mcp", lifespan=lifespan)
 
 
 def _validate_sort(sort: str, *, param: str = "sort") -> str:

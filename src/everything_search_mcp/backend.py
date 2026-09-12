@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from everything_mcp.config import EverythingConfig
+from everything_search_mcp.config import EverythingConfig
 
 __all__ = [
     "EverythingBackend",
@@ -34,7 +34,7 @@ __all__ = [
     "TIME_PERIODS",
 ]
 
-logger = logging.getLogger("everything_mcp")
+logger = logging.getLogger("everything_search_mcp")
 
 # ── Constants ─────────────────────────────────────────────────────────────
 

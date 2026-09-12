@@ -105,7 +105,7 @@ skill 目录搬走也不会失效。
 | `max_results` | 1–500，默认 50 |
 | `offset` | 分页 |
 | `sort` | 14 种，见下表；默认 `date-modified-desc` |
-| `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符 |
+| `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符。**生效情况看回传的 `match_modes`**，别只看 `effective_query` |
 | **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 50 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
 | `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
 
@@ -115,9 +115,15 @@ skill 目录搬走也不会失效。
 （`path`/`category`/`entry_type`/`period` 展开之后）。**结果不合预期时先看它**，
 比猜哪个参数没生效快得多。
 
+> **注意：`match_case` / `match_whole_word` / `match_path` 不会出现在 `effective_query` 里。**
+> 它们是以 HTTP 参数下发的，不是表达式的一部分。这三个的生效情况看
+> **`match_modes`** 字段（文本形式里是 `match modes:` 一行），没设时是空数组。
+> `match_regex` 例外 —— 它会编译成 `regex:` 函数，所以在 `effective_query` 里看得见。
+
 结构化客户端还能拿到 `structuredContent`，字段与文本内容一致：
-`query` / `effective_query` / `total` / `total_accuracy` / `returned` / `offset` /
-`next_offset` / `has_more` / `results[]`，每条含 `name` `path` `full_path` `type` `size` `modified`。
+`query` / `effective_query` / `match_modes` / `total` / `total_accuracy` / `returned` /
+`offset` / `next_offset` / `has_more` / `results[]`，每条含 `name` `path` `full_path`
+`type` `size` `modified`。
 
 > `modified` 是**本地时间**（和资源管理器显示的一致），格式 `YYYY-MM-DD HH:MM:SS`。
 > 直接报给用户即可，不要自己再加时区偏移。
@@ -222,6 +228,11 @@ parent:C:\src ext:py          # src 下一层
 
 - **连接失败** → 检查 Everything 的 HTTP 服务器是否启用（见文首）；这是唯一的传输途径，没有兜底。
 - **`total_size` 是采样** → 不要当精确值。
+- **`breakdown` 里那个数字是"样本内的行数"，不是总数** → 表头写的是 `in sample`，
+  下面还有一行明说。要真实的每类数量/体积，传 `exact_size: true`。
+- **正则写错会被明确拒绝**（括号/字符类不配对、结尾孤立反斜杠）→ 报错而不是返回空结果。
+  但**更隐蔽的正则错误 Everything 仍然静默返回 0 条**，所以正则查询得到 0 时，
+  先怀疑模式本身，别直接下"没有这个文件"的结论。
 - **Everything 必须在运行**（系统托盘）。
 - **默认搜全部已索引磁盘** → 不加 `path` 就是全盘；大结果集用 `max_results`/`offset` 分页。
 - **`content:` 不是"慢"，是"没有"** → 未开启内容索引时（`include_file_content=0`）一律**约 2ms 返回 0 条**，

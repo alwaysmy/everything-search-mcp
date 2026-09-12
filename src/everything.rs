@@ -291,6 +291,63 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Report an unambiguously malformed regular expression, or `None`.
+///
+/// Everything answers a broken pattern with zero matches rather than an error
+/// (measured: `regex:^(unclosed[(` returns HTTP 200 with totalResults 0), so a
+/// typo is indistinguishable from "nothing matched" — the worst failure mode a
+/// search tool can have, because the caller concludes the file is not there.
+///
+/// Only faults that are wrong in every dialect are reported here: unbalanced
+/// parentheses and character classes, and a trailing backslash. Anything subtler
+/// is left to Everything rather than guessed at.
+pub fn regex_syntax_problem(pattern: &str) -> Option<String> {
+    let mut depth: i32 = 0;
+    let mut class_at: Option<usize> = None; // 1-based character position of '['
+    let mut escaped = false;
+    for (pos, c) in pattern.chars().enumerate() {
+        let at = pos + 1;
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '[' if class_at.is_none() => class_at = Some(at),
+            ']' => {
+                if let Some(start) = class_at {
+                    // `[]]` and `[^]]`: a `]` in first position is a literal.
+                    let body: String = pattern.chars().skip(start).take(at - start - 1).collect();
+                    let body = body.strip_prefix('^').unwrap_or(&body);
+                    if !body.is_empty() {
+                        class_at = None;
+                    }
+                }
+            }
+            '(' if class_at.is_none() => depth += 1,
+            ')' if class_at.is_none() => {
+                depth -= 1;
+                if depth < 0 {
+                    return Some(format!("unmatched ')' at character {at}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    if escaped {
+        return Some("the pattern ends with a lone backslash".into());
+    }
+    if let Some(at) = class_at {
+        return Some(format!(
+            "unclosed character class: the '[' at character {at} is never closed"
+        ));
+    }
+    if depth > 0 {
+        return Some(format!("{depth} unclosed '('"));
+    }
+    None
+}
+
 // ---------------------------------------------------------------- config
 
 #[derive(Debug, Clone)]
@@ -512,8 +569,34 @@ mod tests {
     }
 
     #[test]
-    fn every_period_carries_its_dm_prefix() {
-        // Everything has no bare `last1week`: as a term it matches nothing (0
+    fn malformed_regexes_are_caught_and_valid_ones_are_not() {
+        // The reported failure: Everything answers this with 0 matches and no
+        // error, so the tool said "No results" for a typo.
+        assert!(regex_syntax_problem("^(unclosed[(").is_some());
+        assert!(regex_syntax_problem("(a|b").is_some());
+        assert!(regex_syntax_problem("a)b").is_some());
+        assert!(regex_syntax_problem("abc\\").is_some());
+        assert!(regex_syntax_problem("[abc").is_some());
+        assert!(regex_syntax_problem("[").is_some());
+
+        // Valid patterns must pass, including the two constructs that look wrong
+        // to a naive balance check.
+        for ok in [
+            "^main\\.rs$",
+            "[]]",
+            "[^]]",
+            "a\\)b",
+            "[a-z]+(\\d{2,3})?",
+            "^(foo|bar)$",
+            "\\(literal\\)",
+            "x[[]y",
+        ] {
+            assert_eq!(regex_syntax_problem(ok), None, "should accept {ok:?}");
+        }
+    }
+
+    #[test]
+    fn every_period_carries_its_dm_prefix() {        // Everything has no bare `last1week`: as a term it matches nothing (0
         // results, versus 497,396 for `dm:last1week`). A period value without the
         // prefix therefore turns every recent-file search into an empty result,
         // which the auto-expand fallback then quietly answers from all time.

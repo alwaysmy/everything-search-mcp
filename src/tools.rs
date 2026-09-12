@@ -94,6 +94,8 @@ fn results_output_schema() -> Value {
             "query": {"type": "string", "description": "the query as requested"},
             "effective_query": {"type": "string",
                 "description": "the Everything expression actually executed, after path/category/entry_type/period expansion"},
+            "match_modes": {"type": "array", "items": {"type": "string"},
+                "description": "match modifiers that were in effect. These travel as HTTP parameters rather than as part of the expression, so effective_query cannot show them; empty means none were set"},
             "probes": {"type": "array", "items": {"type": "string"},
                 "description": "extra queries executed by multi-probe; empty when probe was not requested"},
             "total": {"type": "integer", "description": "matching objects in the index"},
@@ -105,7 +107,7 @@ fn results_output_schema() -> Value {
             "results": {"type": "array", "items": item_schema()},
             "elapsed_ms": {"type": "number"}
         },
-        "required": ["query", "effective_query", "total", "total_accuracy",
+        "required": ["query", "effective_query", "match_modes", "total", "total_accuracy",
                      "returned", "offset", "has_more", "results", "elapsed_ms"],
         "additionalProperties": false
     })
@@ -624,8 +626,38 @@ impl Tools {
         let sort = s_or(args, "sort", "date-modified-desc");
         everything::validate_sort(&sort)?;
         let regex = b(args, "match_regex", false);
+        let match_case = b(args, "match_case", false);
+        let match_whole_word = b(args, "match_whole_word", false);
+        let match_path = b(args, "match_path", false);
         let max_per_parent = u(args, "max_per_parent", 0);
         let include_total = b(args, "include_total", false);
+
+        // A malformed pattern is not a search that found nothing, and Everything
+        // reports both the same way. Refuse the typo instead of answering it.
+        if regex {
+            if let Some(problem) = everything::regex_syntax_problem(&query) {
+                return Err(format!(
+                    "match_regex is set but the pattern is not well-formed: {problem}. \
+                     Everything returns zero matches for a broken pattern rather than an \
+                     error, so this would have looked like an empty result."
+                ));
+            }
+        }
+
+        // These three travel as HTTP parameters, not as part of the search
+        // expression, so `effective_query` cannot show them. Reported back
+        // explicitly: otherwise the only way to tell whether a flag took effect is
+        // to compare match counts and guess.
+        let mut match_modes: Vec<&str> = Vec::new();
+        if match_case {
+            match_modes.push("case-sensitive");
+        }
+        if match_whole_word {
+            match_modes.push("whole-word");
+        }
+        if match_path {
+            match_modes.push("match full path");
+        }
 
         let effective = compile(&Filters {
             raw: &query,
@@ -644,10 +676,10 @@ impl Tools {
             offset,
             sort: &sort,
             ascending: !sort.ends_with("-desc"),
-            case: b(args, "match_case", false),
-            whole_word: b(args, "match_whole_word", false),
+            case: match_case,
+            whole_word: match_whole_word,
             regex: false, // already compiled into the expression as the regex: function
-            match_path: b(args, "match_path", false),
+            match_path,
             path: None, // already compiled into the expression as the path: function
         })?;
 
@@ -706,7 +738,11 @@ impl Tools {
             if diversified {
                 head.push_str(&format!("diversified: at most {max_per_parent} per parent directory\n"));
             }
-            head.push_str(&format!("effective query: {effective}\n\n"));
+            head.push_str(&format!("effective query: {effective}\n"));
+            if !match_modes.is_empty() {
+                head.push_str(&format!("match modes: {}\n", match_modes.join(", ")));
+            }
+            head.push('\n');
             head.push_str(&format_items(&items, offset, total));
             head
         };
@@ -720,6 +756,7 @@ impl Tools {
         let structured = json!({
             "query": query,
             "effective_query": effective,
+            "match_modes": match_modes,
             "probes": probes,
             "total": total,
             "total_accuracy": "exact",
@@ -838,7 +875,10 @@ impl Tools {
             .and_then(|v| v.as_array())
             .ok_or("paths is required (array of absolute paths)")?;
         if paths.is_empty() || paths.len() > 20 {
-            return Err("paths must contain 1-20 entries".into());
+            return Err(format!(
+                "paths must contain 1-20 entries, got {}",
+                paths.len()
+            ));
         }
         let preview = u(args, "preview_lines", 0).min(200);
         let mut entries: Vec<Value> = Vec::new();
@@ -1095,12 +1135,27 @@ impl Tools {
             let covers_all = items.len() as u64 >= total;
             let accuracy = if covers_all { "exact" } else { "sampled" };
             text.push_str(&format!(
-                "breakdown ({accuracy}, from {} of {} files):\n",
+                "breakdown ({accuracy}, from {} of {} matches):\n",
                 items.len(),
                 total
             ));
+            // The number under `rows` is how many files of that extension are in
+            // the sample, not how many exist. Without a column header that reads as
+            // a total — the reported confusion — so the sample size is spelled out
+            // and, when the sample is partial, so is the word used for the column.
+            let column = if covers_all { "count" } else { "in sample" };
+            text.push_str(&format!("  {:<12} {:>9}  {}\n", "extension", column, "size"));
             for (ext, (n, sz)) in by_ext.iter().take(40) {
-                text.push_str(&format!("  {ext:<12} {n:>6}  {}\n", everything::human_size(*sz)));
+                text.push_str(&format!(
+                    "  {ext:<12} {n:>9}  {}\n",
+                    everything::human_size(*sz)
+                ));
+            }
+            if !covers_all {
+                text.push_str(&format!(
+                    "  (counts are rows within the {}-row sample, not totals in the result set)\n",
+                    items.len()
+                ));
             }
             structured["breakdown"] = json!(list);
             structured["breakdown_accuracy"] = json!(accuracy);
@@ -1120,7 +1175,13 @@ impl Tools {
             .and_then(|v| v.as_array())
             .ok_or("queries is required (array of everything_search argument objects)")?;
         if queries.is_empty() || queries.len() > 8 {
-            return Err("queries must contain 1-8 entries".into());
+            // Report the count that was actually received. Without it a transient
+            // client-side serialisation problem and a genuinely oversized payload
+            // produce the same message, and the caller cannot tell which happened.
+            return Err(format!(
+                "queries must contain 1-8 entries, got {}",
+                queries.len()
+            ));
         }
         let max_total = u(args, "max_total_results", 200).clamp(1, 2000);
 

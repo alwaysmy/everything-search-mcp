@@ -141,6 +141,11 @@ skill 目录搬走也不会失效。
 - `auto_expand`：默认 true。窗口内结果太少时**自动放宽到全部时间**。
 - **注意回传的 `requested_period` / `effective_period` / `expanded`** ——
   `expanded: true` 说明结果**不是**那个时间窗内的，别当成"最近 24 小时的变化"。
+- **结果按修改时间倒序，所以"未来时间戳"的文件永远排最前。** 有些文件被故意设成
+  2098-01-01 之类（打包/破解软件常见），Everything 的 `dm:last*` 是"从 X 之前到现在"
+  的开区间，未来时间也满足，于是它们会霸占"最近改动"的前几条。
+  看到这种时间戳直接**跳过或明确说明**，不要当成"刚改过"；需要真实近期改动时用
+  `everything_search` 配 `dm:last7days` 并自己过滤掉未来时间。
 
 ## `everything_file_details`
 

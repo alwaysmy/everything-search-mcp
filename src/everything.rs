@@ -76,28 +76,36 @@ pub fn file_type_names() -> Vec<&'static str> {
     FILE_TYPES.iter().map(|(k, _)| *k).collect()
 }
 
-/// Accepted `period` values for `everything_find_recent` -> Everything `dm:` syntax.
+/// Accepted `period` values for `everything_find_recent` -> a complete Everything
+/// expression.
+///
+/// The `dm:` prefix is part of the value on purpose. Everything has no notion of
+/// a bare `last1week`: as a search term it matches nothing at all (measured:
+/// 0 results, against 497,396 for `dm:last1week`). Returning the prefix-less
+/// value and relying on the caller to add it is exactly how this was broken, so
+/// the value is no longer separable from its prefix. `file_type_query` returns
+/// `ext:...` for the same reason.
 pub fn period_query(period: &str) -> Option<&'static str> {
     Some(match period {
-        "1min" => "last1min",
-        "5min" => "last5mins",
-        "10min" => "last10mins",
-        "15min" => "last15mins",
-        "30min" => "last30mins",
-        "1hour" => "last1hour",
-        "2hours" => "last2hours",
-        "6hours" => "last6hours",
-        "12hours" => "last12hours",
-        "today" => "today",
-        "yesterday" => "yesterday",
-        "1day" => "last1day",
-        "3days" => "last3days",
-        "1week" => "last1week",
-        "2weeks" => "last2weeks",
-        "1month" => "last1month",
-        "3months" => "last3months",
-        "6months" => "last6months",
-        "1year" => "last1year",
+        "1min" => "dm:last1min",
+        "5min" => "dm:last5mins",
+        "10min" => "dm:last10mins",
+        "15min" => "dm:last15mins",
+        "30min" => "dm:last30mins",
+        "1hour" => "dm:last1hour",
+        "2hours" => "dm:last2hours",
+        "6hours" => "dm:last6hours",
+        "12hours" => "dm:last12hours",
+        "today" => "dm:today",
+        "yesterday" => "dm:yesterday",
+        "1day" => "dm:last1day",
+        "3days" => "dm:last3days",
+        "1week" => "dm:last1week",
+        "2weeks" => "dm:last2weeks",
+        "1month" => "dm:last1month",
+        "3months" => "dm:last3months",
+        "6months" => "dm:last6months",
+        "1year" => "dm:last1year",
         _ => return None,
     })
 }
@@ -501,5 +509,20 @@ mod tests {
         let m = local_offset_minutes();
         assert!((-720..=840).contains(&m), "offset {m} minutes is not a real timezone");
         assert_eq!(m % 15, 0, "offsets are always a multiple of 15 minutes");
+    }
+
+    #[test]
+    fn every_period_carries_its_dm_prefix() {
+        // Everything has no bare `last1week`: as a term it matches nothing (0
+        // results, versus 497,396 for `dm:last1week`). A period value without the
+        // prefix therefore turns every recent-file search into an empty result,
+        // which the auto-expand fallback then quietly answers from all time.
+        for p in PERIOD_NAMES {
+            let q = period_query(p).expect("every listed period must resolve");
+            assert!(q.starts_with("dm:"), "period '{p}' resolved to '{q}' without dm:");
+        }
+        assert_eq!(period_query("1week"), Some("dm:last1week"));
+        assert_eq!(period_query("today"), Some("dm:today"));
+        assert_eq!(period_query("nonsense"), None);
     }
 }

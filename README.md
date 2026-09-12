@@ -6,7 +6,7 @@
   <p>
     <a href="https://pypi.org/project/everything-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
     <a href="https://pypi.org/project/everything-mcp/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
-    <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/alwaysmy/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
+    <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/alwaysmy/everything-search-mcp.svg?cacheSeconds=300&v=20260204"></a>
   </p>
 </div>
 
@@ -22,7 +22,7 @@
 ## Quick start
 
 ```
-/plugin marketplace add alwaysmy/everything-mcp
+/plugin marketplace add alwaysmy/everything-search-mcp
 /plugin install everything-mcp@everything-mcp
 ```
 
@@ -103,7 +103,7 @@ pip install everything-mcp  # or via pip
 From source:
 
 ```bash
-git clone https://github.com/alwaysmy/everything-mcp.git
+git clone https://github.com/alwaysmy/everything-search-mcp.git
 cd everything-mcp && pip install -e ".[dev]"
 ```
 
@@ -286,4 +286,4 @@ MIT - see [LICENSE](LICENSE)
 
 [voidtools](https://www.voidtools.com/) for Everything, [Anthropic](https://anthropic.com/) for the Model Context Protocol, and the MCP community.
 
-<!-- mcp-name: io.github.alwaysmy/everything-mcp -->
+<!-- mcp-name: io.github.alwaysmy/everything-search-mcp -->

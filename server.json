@@ -1,10 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.alwaysmy/everything-mcp",
+  "name": "io.github.alwaysmy/everything-search-mcp",
   "title": "Everything File Search",
   "description": "Lightning-fast Windows file search for AI agents via voidtools Everything's real-time NTFS index",
   "repository": {
-    "url": "https://github.com/alwaysmy/everything-mcp",
+    "url": "https://github.com/alwaysmy/everything-search-mcp",
     "source": "github"
   },
   "version": "1.1.0",

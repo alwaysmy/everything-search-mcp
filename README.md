@@ -4,8 +4,7 @@
     <strong>MCP server for <a href="https://www.voidtools.com/">voidtools Everything</a> - search millions of Windows files in milliseconds from any AI agent.</strong>
   </p>
   <p>
-    <a href="https://pypi.org/project/everything-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
-    <a href="https://pypi.org/project/everything-mcp/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/everything-mcp.svg?cacheSeconds=300&v=20260204"></a>
+    <a href="https://github.com/alwaysmy/everything-search-mcp"><img alt="Repository" src="https://img.shields.io/badge/repo-alwaysmy%2Feverything--search--mcp-111827"></a>
     <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/alwaysmy/everything-search-mcp.svg?cacheSeconds=300&v=20260204"></a>
   </p>
 </div>
@@ -23,14 +22,14 @@
 
 ```
 /plugin marketplace add alwaysmy/everything-search-mcp
-/plugin install everything-mcp@everything-mcp
+/plugin install everything-search-mcp@everything-search-mcp
 ```
 
 That's it for Claude Code - the plugin bundles the MCP server and a skill that teaches the query syntax. For every other client, see [Installation](#installation) below.
 
 ## Why this one
 
-|  | **everything-mcp** (this) | [mamertofabian](https://github.com/mamertofabian/mcp-everything-search) (342⭐) | [Josephur](https://github.com/Josephur/everything-mcp) (26⭐) | essovius |
+|  | **everything-search-mcp** (this) | [mamertofabian](https://github.com/mamertofabian/mcp-everything-search) (342⭐) | [Josephur](https://github.com/Josephur/everything-mcp) (26⭐) | essovius |
 |---|---|---|---|---|
 | Tools | 5 | 1 | 1 | 16 |
 | Setup | Auto-detects es.exe | Manual SDK DLL path | Manual HTTP server + host/port | Manual es.exe in PATH |
@@ -42,7 +41,7 @@ That's it for Claude Code - the plugin bundles the MCP server and a skill that t
 
 `es.exe` (Everything's real-time NTFS index) vs. a naive filesystem walk, same query:
 
-- **everything-mcp**: 220 ms avg (5 runs)
+- **everything-search-mcp**: 220 ms avg (5 runs)
 - **Naive walk of `C:\`**: 66,539 ms
 - **~300x faster**
 
@@ -95,16 +94,21 @@ print("Matches:", len(matches))
 
 ### Run the server
 
+This fork is **not published to PyPI**, so install it straight from the repository:
+
 ```bash
-uvx everything-mcp          # recommended, no install needed
-pip install everything-mcp  # or via pip
+uv tool install --from git+https://github.com/alwaysmy/everything-search-mcp everything-search-mcp  # installs the command
+uvx --from git+https://github.com/alwaysmy/everything-search-mcp everything-search-mcp             # or run once, without installing
 ```
 
-From source:
+Either way the executable is named `everything-search-mcp`; the client configs
+below assume it is on your `PATH`.
+
+From a local checkout:
 
 ```bash
 git clone https://github.com/alwaysmy/everything-search-mcp.git
-cd everything-mcp && pip install -e ".[dev]"
+cd everything-search-mcp && pip install -e ".[dev]"
 ```
 
 ### Add it to your client
@@ -115,8 +119,7 @@ Every client below uses the same MCP server definition:
 {
   "mcpServers": {
     "everything": {
-      "command": "uvx",
-      "args": ["everything-mcp"]
+      "command": "everything-search-mcp"
     }
   }
 }
@@ -124,24 +127,24 @@ Every client below uses the same MCP server definition:
 
 | Client | How to add it |
 |---|---|
-| **Claude Code** | `/plugin install everything-mcp@everything-mcp` (see [Quick start](#quick-start)), or `claude mcp add everything -- uvx everything-mcp` |
+| **Claude Code** | `/plugin install everything-search-mcp@everything-search-mcp` (see [Quick start](#quick-start)), or `claude mcp add everything -- everything-search-mcp` |
 | **Claude Desktop** | Paste the JSON above into `%APPDATA%\Claude\claude_desktop_config.json` |
-| **Codex CLI** | `codex mcp add everything -- uvx everything-mcp` |
-| **Gemini CLI** | `gemini mcp add -s user everything uvx everything-mcp` |
-| **Kimi CLI** | `kimi mcp add --transport stdio everything -- uvx everything-mcp` |
-| **Qwen CLI** | `qwen mcp add -s user everything uvx everything-mcp` |
+| **Codex CLI** | `codex mcp add everything -- everything-search-mcp` |
+| **Gemini CLI** | `gemini mcp add -s user everything everything-search-mcp` |
+| **Kimi CLI** | `kimi mcp add --transport stdio everything -- everything-search-mcp` |
+| **Qwen CLI** | `qwen mcp add -s user everything everything-search-mcp` |
 | **Cursor** | Paste the JSON above into Cursor's MCP settings UI |
 | **Windsurf** | Paste the JSON above into `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
 | **Any other MCP client** | Use the JSON above verbatim |
 
 <details>
-<summary>Using pip instead of uvx</summary>
+<summary>Running a local checkout</summary>
 
 ```json
-{ "mcpServers": { "everything": { "command": "everything-mcp" } } }
+{ "mcpServers": { "everything": { "command": "everything-search-mcp" } } }
 ```
 
-Or with explicit Python: `{"command": "python", "args": ["-m", "everything_mcp"]}`
+Or with explicit Python: `{"command": "python", "args": ["-m", "everything_search_mcp"]}`
 </details>
 
 ### Environment variables (optional)
@@ -164,8 +167,7 @@ Everything MCP auto-detects your setup, but you can override:
 {
   "mcpServers": {
     "everything": {
-      "command": "uvx",
-      "args": ["everything-mcp"],
+      "command": "everything-search-mcp",
       "env": { "EVERYTHING_INSTANCE": "1.5a" }
     }
   }
@@ -262,8 +264,8 @@ Count and size stats without listing every file - check scope before a big searc
 **Debugging:**
 
 ```bash
-everything-mcp 2>everything-mcp.log                        # server logs
-npx @modelcontextprotocol/inspector uvx everything-mcp      # MCP Inspector
+everything-search-mcp 2>everything-search-mcp.log                        # server logs
+npx @modelcontextprotocol/inspector everything-search-mcp          # MCP Inspector
 ```
 
 ---

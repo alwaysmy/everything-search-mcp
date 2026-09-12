@@ -34,7 +34,7 @@ exactly.  For example:
 
 Do not wrap those arguments in a `params` object: a nested payload is rejected
 with `params.<field> Extra inputs are not permitted`.  This matters because
-everything-mcp 1.0.x did nest its arguments, so older examples circulating for
+everything-search-mcp 1.0.x did nest its arguments, so older examples circulating for
 this server may show the wrong shape.
 
 The `tool(args...)` shorthand used below means one JSON argument per key;

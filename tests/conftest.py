@@ -1,11 +1,11 @@
-"""Shared test fixtures for everything-mcp tests."""
+"""Shared test fixtures for everything-search-mcp tests."""
 
 from __future__ import annotations
 
 import pytest
 
-from everything_mcp.backend import EverythingBackend, SearchResult
-from everything_mcp.config import EverythingConfig
+from everything_search_mcp.backend import EverythingBackend, SearchResult
+from everything_search_mcp.config import EverythingConfig
 
 
 @pytest.fixture

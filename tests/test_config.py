@@ -1,10 +1,10 @@
-"""Tests for everything_mcp.config auto-detection logic."""
+"""Tests for everything_search_mcp.config auto-detection logic."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from everything_mcp.config import (
+from everything_search_mcp.config import (
     EverythingConfig,
     _detect_instance,
     _find_es_exe,
@@ -34,7 +34,7 @@ class TestEverythingConfig:
 
     def test_auto_detect_no_es_exe(self):
         """When es.exe can't be found, config has errors."""
-        with patch("everything_mcp.config._find_es_exe", return_value=""):
+        with patch("everything_search_mcp.config._find_es_exe", return_value=""):
             config = EverythingConfig.auto_detect()
             assert not config.is_valid
             assert len(config.errors) > 0
@@ -43,9 +43,9 @@ class TestEverythingConfig:
     def test_auto_detect_success(self):
         """Happy path: es.exe found and connection OK."""
         with (
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "Everything v1.4")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "Everything v1.4")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.is_valid
@@ -54,9 +54,9 @@ class TestEverythingConfig:
     def test_auto_detect_with_1_5a(self):
         """Auto-detects 1.5a instance."""
         with (
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value="1.5a"),
-            patch("everything_mcp.config._test_connection", return_value=(True, "Everything v1.5")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value="1.5a"),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "Everything v1.5")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.is_valid
@@ -66,9 +66,9 @@ class TestEverythingConfig:
         """EVERYTHING_INSTANCE env var is honoured."""
         with (
             patch.dict("os.environ", {"EVERYTHING_INSTANCE": "custom"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.instance == "custom"
@@ -77,9 +77,9 @@ class TestEverythingConfig:
         """EVERYTHING_MAX_RESULTS_CAP overrides the default cap."""
         with (
             patch.dict("os.environ", {"EVERYTHING_MAX_RESULTS_CAP": "200"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.max_results_cap == 200
@@ -88,9 +88,9 @@ class TestEverythingConfig:
         """A non-numeric EVERYTHING_MAX_RESULTS_CAP falls back to the default."""
         with (
             patch.dict("os.environ", {"EVERYTHING_MAX_RESULTS_CAP": "not-a-number"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.max_results_cap == 1000
@@ -99,9 +99,9 @@ class TestEverythingConfig:
         """A non-positive EVERYTHING_MAX_RESULTS_CAP falls back to the default."""
         with (
             patch.dict("os.environ", {"EVERYTHING_MAX_RESULTS_CAP": "-5"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.max_results_cap == 1000
@@ -110,9 +110,9 @@ class TestEverythingConfig:
         """EVERYTHING_TIMEOUT overrides the default 30s timeout."""
         with (
             patch.dict("os.environ", {"EVERYTHING_TIMEOUT": "60"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.timeout == 60
@@ -121,9 +121,9 @@ class TestEverythingConfig:
         """A non-numeric EVERYTHING_TIMEOUT falls back to the default."""
         with (
             patch.dict("os.environ", {"EVERYTHING_TIMEOUT": "fast"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.timeout == 30
@@ -132,9 +132,9 @@ class TestEverythingConfig:
         """A non-positive EVERYTHING_TIMEOUT falls back to the default."""
         with (
             patch.dict("os.environ", {"EVERYTHING_TIMEOUT": "0"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(True, "OK")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(True, "OK")),
         ):
             config = EverythingConfig.auto_detect()
             assert config.timeout == 30
@@ -142,9 +142,9 @@ class TestEverythingConfig:
     def test_auto_detect_connection_fail(self):
         """When Everything isn't running, config records the error."""
         with (
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(False, "IPC not found")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(False, "IPC not found")),
         ):
             config = EverythingConfig.auto_detect()
             assert not config.is_valid
@@ -158,9 +158,9 @@ class TestEverythingConfig:
 
         with (
             patch.dict("os.environ", {"EVERYTHING_INSTANCE": "1.5a"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", side_effect=connection),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", side_effect=connection),
         ):
             config = EverythingConfig.auto_detect()
             assert config.is_valid
@@ -172,9 +172,9 @@ class TestEverythingConfig:
         """When nothing responds, the error suggests removing EVERYTHING_INSTANCE."""
         with (
             patch.dict("os.environ", {"EVERYTHING_INSTANCE": "1.5a"}),
-            patch("everything_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
-            patch("everything_mcp.config._detect_instance", return_value=""),
-            patch("everything_mcp.config._test_connection", return_value=(False, "IPC not found")),
+            patch("everything_search_mcp.config._find_es_exe", return_value=r"C:\es.exe"),
+            patch("everything_search_mcp.config._detect_instance", return_value=""),
+            patch("everything_search_mcp.config._test_connection", return_value=(False, "IPC not found")),
         ):
             config = EverythingConfig.auto_detect()
             assert not config.is_valid
@@ -206,19 +206,19 @@ class TestFindEsExe:
     def test_env_file_path(self, tmp_path):
         exe = tmp_path / "es.exe"
         exe.write_text("x")
-        with patch("everything_mcp.config._is_everything_es", return_value=True):
+        with patch("everything_search_mcp.config._is_everything_es", return_value=True):
             assert _find_es_exe(str(exe)) == str(exe)
 
     def test_env_dir_path(self, tmp_path):
         exe = tmp_path / "es.exe"
         exe.write_text("x")
-        with patch("everything_mcp.config._is_everything_es", return_value=True):
+        with patch("everything_search_mcp.config._is_everything_es", return_value=True):
             assert _find_es_exe(str(tmp_path)) == str(exe)
 
     def test_env_invalid_falls_back_to_path(self):
         with (
-            patch("everything_mcp.config._is_everything_es", return_value=True),
-            patch("everything_mcp.config.shutil.which", return_value=r"C:\path\es.exe"),
+            patch("everything_search_mcp.config._is_everything_es", return_value=True),
+            patch("everything_search_mcp.config.shutil.which", return_value=r"C:\path\es.exe"),
         ):
             assert _find_es_exe(r"C:\nope\missing.exe") == r"C:\path\es.exe"
 
@@ -226,10 +226,10 @@ class TestFindEsExe:
         exe = tmp_path / "es.exe"
         exe.write_text("x")
         with (
-            patch("everything_mcp.config._is_everything_es", return_value=True),
-            patch("everything_mcp.config.shutil.which", return_value=None),
+            patch("everything_search_mcp.config._is_everything_es", return_value=True),
+            patch("everything_search_mcp.config.shutil.which", return_value=None),
             patch(
-                "everything_mcp.config.ES_SEARCH_PATHS",
+                "everything_search_mcp.config.ES_SEARCH_PATHS",
                 [str(tmp_path)],
             ),
         ):
@@ -237,9 +237,9 @@ class TestFindEsExe:
 
     def test_nothing_found_returns_empty(self):
         with (
-            patch("everything_mcp.config._is_everything_es", return_value=False),
-            patch("everything_mcp.config.shutil.which", return_value=None),
-            patch("everything_mcp.config._find_via_registry", return_value=""),
+            patch("everything_search_mcp.config._is_everything_es", return_value=False),
+            patch("everything_search_mcp.config.shutil.which", return_value=None),
+            patch("everything_search_mcp.config._find_via_registry", return_value=""),
         ):
             assert _find_es_exe("") == ""
 

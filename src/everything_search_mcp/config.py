@@ -18,7 +18,7 @@ from pathlib import Path
 
 __all__ = ["EverythingConfig"]
 
-logger = logging.getLogger("everything_mcp")
+logger = logging.getLogger("everything_search_mcp")
 
 # ── Search locations for es.exe ───────────────────────────────────────────
 

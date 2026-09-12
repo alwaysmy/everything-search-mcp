@@ -8,9 +8,9 @@ to search files at lightning speed via Everything's real-time NTFS index.
 ## Project Structure
 
 ```
-src/everything_mcp/
+src/everything_search_mcp/
 ├── __init__.py     # Package init, version, main() entry
-├── __main__.py     # python -m everything_mcp
+├── __main__.py     # python -m everything_search_mcp
 ├── py.typed        # PEP 561 type checking marker
 ├── server.py       # MCP server, tool definitions (the main file)
 ├── backend.py      # Everything communication via es.exe
@@ -37,7 +37,7 @@ tests/
 
 ```bash
 pip install -e ".[dev]"
-everything-mcp
+everything-search-mcp
 ```
 
 ## Testing

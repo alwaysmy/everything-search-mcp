@@ -5,34 +5,48 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.13"]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: pip install -e ".[dev]"
-      - name: Test
-        run: pytest -v
 
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install
-        run: pip install -e ".[dev]"
-      - name: Ruff check
-        run: ruff check src/ tests/
-      - name: Ruff format
-        run: ruff format --check src/ tests/
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Unit tests
+        run: cargo test --locked
+
+      # The unit tests cover the query and classification paths. These cover the
+      # binary the way a user meets it. No Everything instance is needed: the
+      # argument parser and the config writers are what break silently.
+      - name: CLI smoke test
+        shell: pwsh
+        run: |
+          $exe = "target\release\everything-search-mcp.exe"
+
+          $v = & $exe --version
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "bad --version output: $v" }
+
+          $cfg = & $exe config --target json --no-check --json | ConvertFrom-Json
+          if ($cfg.targets[0].snippet -notmatch 'mcpServers') { throw "config emitted no mcpServers block" }
+          if ($cfg.write -ne $false) { throw "config claimed to write something" }
+
+          foreach ($t in 'dsh', 'claude', 'codex', 'vscode', 'opencode') {
+            $doc = & $exe config --target $t --no-check --json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "config --target $t failed" }
+            if (-not $doc.targets[0].snippet) { throw "config --target $t produced no snippet" }
+            if ($doc.targets[0].snippet -notmatch 'everything-search-mcp\.exe') {
+              throw "config --target $t names the wrong executable"
+            }
+          }
+
+          & $exe config --target definitely-not-a-target 2>$null
+          if ($LASTEXITCODE -ne 2) { throw "unknown target should exit 2, got $LASTEXITCODE" }

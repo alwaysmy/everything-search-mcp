@@ -1,301 +1,230 @@
-<div align="center">
-  <h1>⚡ Everything MCP</h1>
-  <p>
-    <strong>MCP server for <a href="https://www.voidtools.com/">voidtools Everything</a> - search millions of Windows files in milliseconds from any AI agent.</strong>
-  </p>
-  <p>
-    <a href="https://github.com/alwaysmy/everything-search-mcp"><img alt="Repository" src="https://img.shields.io/badge/repo-alwaysmy%2Feverything--search--mcp-111827"></a>
-    <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/alwaysmy/everything-search-mcp.svg?cacheSeconds=300&v=20260204"></a>
-  </p>
-</div>
+# everything-search-mcp
 
----
-
-> **The Rust implementation in [`rust/`](rust/) is the active one.** It is a
-> native MCP server with no Python runtime and no `es.exe` subprocess: ~0.5 ms
-> per search round trip and ~5 ms cold start, against ~134 ms and ~1681 ms for
-> the Python version.
->
-> The Python package described below is kept for reference and is **no longer
-> maintained**; it is not a supported fallback. See [`rust/README.md`](rust/README.md).
-
----
-
-> **Personal fork notice** — this is a detached, self-maintained fork of
-> [`elis132/everything-mcp`](https://github.com/elis132/everything-mcp) (MIT).
-> The upstream remote was removed on 2026-09-12 and **upstream changes are no
-> longer tracked or merged**. The last absorbed upstream commit is pinned to the
-> local tag `upstream-base-elis132`, so history stays traceable without any
-> remote. Copyright remains with the original author — see [LICENSE](LICENSE).
-
-## Quick start
+Instant whole-disk file search for AI agents on Windows, exposed as five MCP
+tools. A single native executable — **no Python runtime, no `es.exe` subprocess,
+no SDK DLL** — that answers from
+[voidtools Everything](https://www.voidtools.com/)'s live NTFS index in about a
+millisecond.
 
 ```
-/plugin marketplace add alwaysmy/everything-search-mcp
-/plugin install everything-search-mcp@everything-search-mcp
+mcp__everything-search__everything_search
+mcp__everything-search__everything_find_recent
+mcp__everything-search__everything_file_details
+mcp__everything-search__everything_count_stats
+mcp__everything-search__everything_search_batch
 ```
 
-That's it for Claude Code - the plugin bundles the MCP server and a skill that teaches the query syntax. For every other client, see [Installation](#installation) below.
+## Install
 
-## Why this one
+**1. Get the binary.** Download `everything-search-mcp.exe` from
+[Releases](https://github.com/alwaysmy/everything-search-mcp/releases), or grab
+`everything-search-skill.zip`, which is the binary plus the agent-facing skill
+that explains how to use the tools well.
 
-|  | **everything-search-mcp** (this) | [mamertofabian](https://github.com/mamertofabian/mcp-everything-search) (342⭐) | [Josephur](https://github.com/Josephur/everything-mcp) (26⭐) | essovius |
-|---|---|---|---|---|
-| Tools | 5 | 1 | 1 | 16 |
-| Setup | Auto-detects es.exe | Manual SDK DLL path | Manual HTTP server + host/port | Manual es.exe in PATH |
-| Everything 1.5 | Auto-detects instance | Not supported | Untested | Manual flag |
-| Talks to Everything via | `es.exe` subprocess | Everything SDK (DLL) | Everything's HTTP server plugin (unauthenticated) | `es.exe` subprocess |
-| Tests / CI | pytest, GitHub Actions | None visible | None visible | None visible |
-
-## Performance
-
-`es.exe` (Everything's real-time NTFS index) vs. a naive filesystem walk, same query:
-
-- **everything-search-mcp**: 220 ms avg (5 runs)
-- **Naive walk of `C:\`**: 66,539 ms
-- **~300x faster**
-
-<details>
-<summary>Reproduce this benchmark</summary>
+**2. Point your clients at it.** The executable knows its own absolute path, so
+it writes the configuration itself — no hand-copied paths, and nothing breaks
+when the folder moves:
 
 ```powershell
-@'
-import os, subprocess, time, statistics
-
-ES = os.path.expandvars(r"%LOCALAPPDATA%\Everything\es.exe")
-QUERY = "everything.exe"
-
-es_runs = []
-for _ in range(5):
-    t0 = time.perf_counter()
-    subprocess.run([ES, "-n", "100", QUERY], capture_output=True, text=True)
-    es_runs.append((time.perf_counter() - t0) * 1000)
-
-t0 = time.perf_counter()
-matches = []
-for dirpath, _, filenames in os.walk(r"C:\\"):
-    for name in filenames:
-        if name.lower() == QUERY:
-            matches.append(os.path.join(dirpath, name))
-walk_ms = (time.perf_counter() - t0) * 1000
-
-es_avg = statistics.mean(es_runs)
-print("ES avg ms:", round(es_avg, 2))
-print("Walk ms:", round(walk_ms, 2))
-print("Speedup x:", round(walk_ms / es_avg, 1))
-print("Matches:", len(matches))
-'@ | python -
-```
-</details>
-
----
-
-## Installation
-
-### Prerequisites
-
-1. **Windows** with [Everything](https://www.voidtools.com/) installed and **running**
-2. **es.exe** (Everything's command-line interface) - included with Everything 1.5 alpha, or install separately:
-   - `winget install voidtools.Everything.Cli`
-   - `scoop install everything-cli`
-   - `choco install es`
-   - or download from [github.com/voidtools/es](https://github.com/voidtools/es/releases) and place it in your PATH
-3. **Python 3.10+** or **uv**
-
-### Run the server
-
-This fork is **not published to PyPI**, so install it straight from the repository:
-
-```bash
-uv tool install --from git+https://github.com/alwaysmy/everything-search-mcp everything-search-mcp  # installs the command
-uvx --from git+https://github.com/alwaysmy/everything-search-mcp everything-search-mcp             # or run once, without installing
+.\everything-search-mcp.exe config          # show what each client on this machine needs
+.\everything-search-mcp.exe config --write  # apply it (every file backed up first)
 ```
 
-Either way the executable is named `everything-search-mcp`; the client configs
-below assume it is on your `PATH`.
+It covers DeepSeek Harness, Claude Code, Claude Desktop, Codex CLI, Gemini CLI,
+Cursor, VS Code and opencode, each in its own format. With no `--target` it acts
+on exactly those clients whose config file already exists; with no `--write` it
+changes nothing and just prints the snippet.
 
-From a local checkout:
+**3. Requirements.** Windows, Everything installed **and running**, and
+Everything's HTTP server enabled on port `23333`
+(Tools → Options → HTTP Server).
 
-```bash
-git clone https://github.com/alwaysmy/everything-search-mcp.git
-cd everything-search-mcp && pip install -e ".[dev]"
-```
+> The server binds `0.0.0.0` and serves file contents by default, so anyone on
+> your LAN can query the whole index. Restrict it in Everything's `Plugins.ini`:
+> ```ini
+> [http_server64.dll]
+> bindings=127.0.0.1
+> allow_file_download=0
+> ```
 
-### Add it to your client
+## Why it is fast
 
-Every client below uses the same MCP server definition:
+Everything is reached over its built-in HTTP server rather than through `es.exe`,
+IPC or the SDK DLL. Measured on one machine (Everything 1.5.0.1396, warm, same
+query):
 
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "everything-search-mcp"
-    }
-  }
-}
-```
+| Approach | Median |
+|---|---:|
+| **HTTP on loopback** | **0.70 ms** |
+| IPC `WM_COPYDATA` | 17.44 ms |
+| SDK3 `Everything3_x64.dll` | 17.34 ms |
+| SDK2 `Everything64.dll` | 27.77 ms |
+| `es.exe` subprocess | 60.24 ms |
 
-| Client | How to add it |
-|---|---|
-| **Claude Code** | `/plugin install everything-search-mcp@everything-search-mcp` (see [Quick start](#quick-start)), or `claude mcp add everything -- everything-search-mcp` |
-| **Claude Desktop** | Paste the JSON above into `%APPDATA%\Claude\claude_desktop_config.json` |
-| **Codex CLI** | `codex mcp add everything -- everything-search-mcp` |
-| **Gemini CLI** | `gemini mcp add -s user everything everything-search-mcp` |
-| **Kimi CLI** | `kimi mcp add --transport stdio everything -- everything-search-mcp` |
-| **Qwen CLI** | `qwen mcp add -s user everything everything-search-mcp` |
-| **Cursor** | Paste the JSON above into Cursor's MCP settings UI |
-| **Windsurf** | Paste the JSON above into `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
-| **Any other MCP client** | Use the JSON above verbatim |
+Against the original Python implementation, same query and machine:
 
-<details>
-<summary>Running a local checkout</summary>
+| | Python | This | |
+|---|---:|---:|---|
+| MCP `tools/call` round trip | 134.0 ms | **0.53 ms** | 251× |
+| Cold start (spawn + `initialize`) | 1681 ms | **5 ms** | 336× |
+| Distribution size | interpreter + deps | **~580 KB** | — |
 
-```json
-{ "mcpServers": { "everything": { "command": "everything-search-mcp" } } }
-```
-
-Or with explicit Python: `{"command": "python", "args": ["-m", "everything_search_mcp"]}`
-</details>
-
-### Environment variables (optional)
-
-Everything MCP auto-detects your setup, but you can override:
-
-| Variable | Description | Example |
-|---|---|---|
-| `EVERYTHING_ES_PATH` | Path to es.exe | `C:\Program Files\Everything\es.exe` |
-| `EVERYTHING_INSTANCE` | Named Everything instance | `1.5a` |
-| `EVERYTHING_MAX_RESULTS_CAP` | Hard cap on results per search (default `1000`) | `200` |
-| `EVERYTHING_TIMEOUT` | es.exe call timeout in seconds (default `30`) | `60` |
-
-> Only set `EVERYTHING_INSTANCE` if you explicitly configured a named instance
-> in Everything (Tools → Options → General → Instance). Most installs -
-> including most Everything 1.5 installs - run on the **default** instance;
-> setting this unnecessarily breaks the connection. If in doubt, leave it out.
-
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "everything-search-mcp",
-      "env": { "EVERYTHING_INSTANCE": "1.5a" }
-    }
-  }
-}
-```
-
----
+Dropping the interpreter buys one order of magnitude; the transport change buys
+the rest.
 
 ## Tools
 
-### 1. `everything_search` - the workhorse
-
-| Parameter | Default | Description |
-|---|---|---|
-| `query` | *(required)* | Everything search query |
-| `path` | `""` | Restrict to a directory (preferred over `path:` in the query) |
-| `max_results` | 50 | 1-500 |
-| `sort` | `date-modified-desc` | name, path, size, date-modified, date-created, extension (+ `-desc` variants) |
-| `match_case` / `match_whole_word` / `match_regex` / `match_path` | false | Match modifiers |
-| `offset` | 0 | Pagination offset |
-| `include_total` | false | Also report the total number of matches (`-get-result-count`) |
-
-**Query syntax:**
-
-```
-*.py                          all Python files
-ext:py;js;ts                  multiple extensions
-ext:py path:C:\Projects       Python files under a path
-size:>10mb                    larger than 10 MB
-size:1kb..1mb                 between 1 KB and 1 MB
-dm:today / dm:last1week       modified today / in the last week
-dc:2024                       created in 2024 (SLOW: creation time is not
-                              indexed by default; may time out - prefer dm:)
-"exact name.txt"              exact filename match
-project1 | project2           OR search
-!node_modules                 exclude a term
-content:TODO                  files containing TODO (needs content indexing)
-regex:^test_.*\.py$           regex search
-parent:C:\src ext:py          files directly inside 'src' folders (full path)
-dupe:  /  empty:               duplicate filenames / empty folders
-```
-
-### 2. `everything_search_by_type` - category search
-
-Categories: `audio`, `video`, `image`, `document`, `code`, `archive`, `executable`, `font`, `3d`, `data`
-
-Parameters: `file_type` *(required)*, `query`, `path`, `max_results`, `sort`
-
-### 3. `everything_find_recent` - what changed?
-
-Periods: `1min` … `12hours`, `today`, `yesterday`, `1day` … `1year`
-
-Parameters: `period` (default `1day`), `path`, `extensions`, `query`, `max_results`, `auto_expand` (default true)
-
-When the period yields fewer results than `max_results`, `auto_expand` retries without the time restriction (all time) so the call still returns a useful set; the result label notes `[auto-expanded to all time]`. Pass `auto_expand=false` for a strict period.
-
-### 4. `everything_file_details` - deep inspection
-
-Parameters: `paths` *(required, 1-20)*, `preview_lines` (0-200)
-
-Returns full metadata; for directories, item count and listing; for text files with a preview, the first N lines.
-
-### 5. `everything_count_stats` - quick analytics
-
-Parameters: `query` *(required)*, `path`, `include_size` (default true), `breakdown_by_extension`, `sample_sort` (default `date-modified-desc`)
-
-Count and size stats without listing every file - check scope before a big search.
-
-`sample_sort` controls how files are sampled for the extension breakdown. The default (`date-modified-desc`) is less biased than `name`, because file-name order correlates with file extensions.
-
----
-
-## Examples
-
-| Ask | Call |
+| Tool | Purpose |
 |---|---|
-| Python files modified today in my project | `everything_find_recent(period="today", extensions="py", path="C:\Projects\myapp")` |
-| How much space do my log files use? | `everything_count_stats(query="ext:log", include_size=true, breakdown_by_extension=true)` |
-| First 50 lines of a config file | `everything_file_details(paths=["C:\Projects\app\config.yaml"], preview_lines=50)` |
-| Duplicate filenames in Documents | `everything_search(query='dupe: path:"C:\Users\me\Documents"')` |
-| Images larger than 5MB | `everything_search(query="ext:jpg;png;gif size:>5mb")` |
-| How many .py files exist? | `everything_search(query="ext:py", max_results=1, include_total=true)` |
+| `everything_search` | Query by name, extension, size or date. `category` presets, `entry_type` (file/folder), `path` scoping, paging, sorting, regex, `max_per_parent` diversification, opt-in multi-`probe` |
+| `everything_find_recent` | Files modified within a period, with auto-expand to all time and explicit requested-vs-effective window reporting |
+| `everything_file_details` | Metadata and an optional triage preview for specific paths |
+| `everything_count_stats` | Count and size without listing; optional per-extension breakdown |
+| `everything_search_batch` | 1–8 searches per call, to save agent round trips |
 
----
+Every result reports the Everything expression that actually ran, so a surprise
+is diagnosable instead of guessable:
 
-## Troubleshooting
-
-**"es.exe not found"** - Install [Everything](https://www.voidtools.com/) and [es.exe](https://github.com/voidtools/es/releases), or set `EVERYTHING_ES_PATH`.
-
-**"Everything IPC window not found"** - Make sure Everything is running (check the system tray). If you set `EVERYTHING_INSTANCE`, try removing it - most installs don't need it. Everything Lite doesn't support IPC.
-
-**No results for valid queries** - Confirm Everything's index has finished building, try the same query in Everything's GUI, and check the drive/path is included in Everything's index settings.
-
-**Debugging:**
-
-```bash
-everything-search-mcp 2>everything-search-mcp.log                        # server logs
-npx @modelcontextprotocol/inspector everything-search-mcp          # MCP Inspector
+```json
+{
+  "query": "*.rs",
+  "effective_query": "path:\"D:\\proj\" file: ext:rs;...;hcl *.rs",
+  "total": 6, "total_accuracy": "exact",
+  "returned": 3, "offset": 0, "next_offset": 3, "has_more": true,
+  "results": [{"name": "tools.rs", "path": "D:\\proj\\src",
+               "full_path": "D:\\proj\\src\\tools.rs", "type": "file",
+               "size": 42300, "modified": "2026-09-12 16:27:55"}],
+  "elapsed_ms": 0.81
+}
 ```
 
----
+## The same executable is also a CLI
+
+Started with no arguments it is an MCP stdio server, which is how a client spawns
+it. Started with a subcommand it is a one-shot tool — usable from a script, a CI
+job, or an agent that has no MCP support at all:
+
+```powershell
+everything-search-mcp search "*.py" --path D:\Projects --max 20
+everything-search-mcp recent --period 1week --path D:\Projects
+everything-search-mcp count  "ext:pdf" --exact-size
+everything-search-mcp details D:\a\b.rs --preview 20
+everything-search-mcp config --write
+```
+
+Exit codes: `0` success, `1` query failed (message on stderr), `2` bad arguments.
+`--json` prints the structured form instead of text.
+
+## Accuracy is labelled
+
+| Quantity | Accuracy |
+|---|---|
+| `count` / `total` | **exact** — Everything reports the true total regardless of how many rows are fetched, so `count_stats` asks for a single row when size is not needed |
+| `total_size`, extension breakdown | **not estimated** by default. File sizes are heavily skewed and a top-N slice is not a random sample, so extrapolating produced figures that contradicted each other (23.6 GB for a set whose PDF members alone came to 84 GB). Without `exact_size` the field is omitted and `total_size_accuracy` is `"unavailable"` |
+| `exact_size: true` | sums every match, one paged pass, capped at 200,000 rows — above the cap it says so rather than guessing. 185,892 `.txt` files summed in ~620 ms |
+| `modified` | **local time**, matching Explorer. Everything returns a raw FILETIME (UTC); rendered as-is it was 8 hours behind on a UTC+8 machine, which is exactly the field a "what changed recently" answer is built on |
+
+## Type classification, in two levels
+
+`everything_search` classifies from the **name only and never opens a file**:
+reading a header per result would turn one index lookup into N filesystem
+operations, which behaves completely differently on spinning disks, SMB shares,
+cloud placeholders and machines with aggressive antivirus. Each result carries:
+
+```json
+{"kind": "image", "content_mode": "text", "format": "svg", "type_source": "extension"}
+```
+
+`kind` uses the same vocabulary as the `category` parameter, so a `kind` can be
+fed straight back into `category`. `content_mode` is a separate axis on purpose:
+`.svg` is image **and** text, `.docx` is document and binary, `.rs` is code and
+text.
+
+`everything_file_details` is the level that may read, and only when the extension
+cannot tell — missing, unknown or ambiguous (`.dat`, `.bin`). It reads 16 KB and
+resolves BOM → magic number → heuristic, so UTF-16 text (which is full of NUL
+bytes) is not misread as binary. The preview is a **triage** preview: text files
+only, and not a substitute for the agent's own file-reading tool.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `EVERYTHING_HTTP_URL` | `http://127.0.0.1:23333` | Base URL of Everything's HTTP server |
+| `EVERYTHING_TIMEOUT` | `30` | Request timeout, seconds |
+| `EVERYTHING_MAX_RESULTS_CAP` | `1000` | Hard cap on results per search |
+
+`EVERYTHING_ES_PATH` and `EVERYTHING_INSTANCE` no longer exist: there is no
+`es.exe` to point at, and the HTTP server targets the default instance.
+
+## Design notes
+
+Four things that are easy to get wrong, all of them found the hard way:
+
+- Everything's HTTP API **ignores its `path=` and `folder=` parameters**. A
+  directory scope has to be the `path:"..."` search **function**, not a quoted
+  literal, because under regex matching the whole search text becomes the pattern
+  and an injected literal would be read as part of it — that combination silently
+  returned zero results.
+- For the same reason `match_regex` compiles to the `regex:` function rather than
+  Everything's `&regex=1` flag, so that it composes with `path:`.
+- `match_path` maps to Everything's `p=1` switch, which is absent from the HTTP
+  documentation; confirmed live (274 → 25,686 results for a term that occurs only
+  in paths).
+- Responses are UTF-8 and carry no `Content-Length`, so the body is read to EOF
+  (`Connection: Close`). The lack of keep-alive is irrelevant on loopback: a
+  fresh connection still costs well under a millisecond.
+
+Unknown `sort` and `period` values are rejected with a clear error rather than
+being passed through, and `sample_sort=name` is refused when a breakdown is
+requested, because filename sort correlates with extension and biases the sample.
+
+Errors are returned with `isError: true` per the MCP specification. The original
+Python server caught exceptions and returned them as ordinary result text; a
+client that greps the body for `"Error:"` would need updating.
 
 ## Development
 
-```bash
-pip install -e ".[dev]"   # install with dev dependencies
-pytest                    # run tests
-ruff check src/ tests/    # lint
+```powershell
+cargo build --release      # -> target\release\everything-search-mcp.exe
+cargo test                 # 16 unit tests
+.\deploy.ps1               # build, then install into the skill dir + hard-link onto PATH
+.\deploy.ps1 -NoBuild      # deploy what is already built
 ```
 
-Contributions welcome - see [CLAUDE.md](CLAUDE.md) for the architecture and design decisions. Areas of interest: direct named-pipe IPC, Everything SDK3 for 1.5, content search, file-watching, bookmark/tag support.
+`deploy.ps1` treats the skill directory as the one real copy and makes the names
+on `PATH` **hard links** to it, so they cannot drift. A running MCP server holds
+its own image open, so a redeploy renames the old binary aside rather than
+deleting it (Windows allows renaming a running executable).
+
+```
+Cargo.toml      2 dependencies (serde, serde_json); lto + strip + panic=abort
+deploy.ps1      build and install
+src/
+  main.rs       entry point: no args = MCP stdio server, else the CLI
+  jsonrpc.rs    MCP stdio protocol, flat-schema tools, params compat shim
+  everything.rs HTTP transport, query constants, FILETIME conversion, timezone
+  filetype.rs   name-level classification and header sniffing
+  tools.rs      the five tools, schemas, result formatting
+  cli.rs        one-shot search/recent/count/details, so the exe works with no MCP
+  setup.rs      `config`: emit or apply the client configuration for this exe
+skills/
+  everything-search/   the agent-facing skill (SKILL.md + INSTALL.md)
+```
+
+The crate's only `unsafe` is a single `GetTimeZoneInformation` call, used to
+render `modified` in local time without pulling in a date/time dependency.
+
+## The Python version
+
+This project started as a Python MCP server for Everything. That implementation
+is **frozen and unmaintained**, and it is not a fallback — it lives on the
+`legacy` branch. `main` is the native one.
+
+The tool set and the category table come from
+[elis132/everything-mcp](https://github.com/elis132/everything-mcp), which is
+where this work started.
 
 ## License
 
-MIT - see [LICENSE](LICENSE)
-
-## Acknowledgments
-
-[voidtools](https://www.voidtools.com/) for Everything, [Anthropic](https://anthropic.com/) for the Model Context Protocol, and the MCP community.
-
-<!-- mcp-name: io.github.alwaysmy/everything-search-mcp -->
+MIT — see [LICENSE](LICENSE).

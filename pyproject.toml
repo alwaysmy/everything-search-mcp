@@ -43,10 +43,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/elis132/everything-mcp"
-Repository = "https://github.com/elis132/everything-mcp"
-Issues = "https://github.com/elis132/everything-mcp/issues"
-Changelog = "https://github.com/elis132/everything-mcp/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/alwaysmy/everything-mcp"
+Repository = "https://github.com/alwaysmy/everything-mcp"
+Issues = "https://github.com/alwaysmy/everything-mcp/issues"
+Changelog = "https://github.com/alwaysmy/everything-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 everything-mcp = "everything_mcp:main"
@@ -62,6 +62,10 @@ include = ["src/everything_mcp", "README.md", "LICENSE", "CHANGELOG.md", "pyproj
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# 让 pytest 直接测 src/ 下的代码，而不是 site-packages 里可能陈旧的那份。
+# 没有这一行时，若本机装过 everything-mcp（非 editable），pytest 会静默
+# import 已安装版本，测试结果与实际源码无关。
+pythonpath = ["src"]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

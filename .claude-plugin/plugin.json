@@ -1,12 +1,12 @@
 {
   "name": "everything-mcp",
   "description": "Lightning-fast Windows file search for AI agents via voidtools Everything - 5 MCP tools for search, type filtering, recent files, file details, and count/size stats",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "author": {
     "name": "elis132"
   },
-  "homepage": "https://github.com/elis132/everything-mcp",
-  "repository": "https://github.com/elis132/everything-mcp",
+  "homepage": "https://github.com/alwaysmy/everything-mcp",
+  "repository": "https://github.com/alwaysmy/everything-mcp",
   "license": "MIT",
   "keywords": ["mcp", "everything", "voidtools", "file-search", "windows", "search"],
   "mcpServers": {

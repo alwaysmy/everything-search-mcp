@@ -15,9 +15,30 @@ pub struct Server<H: Handler> {
     initialized: bool,
 }
 
+/// A tool result carrying both the text form and the structured form.
+///
+/// MCP allows `structuredContent` alongside `content`. Clients have disagreed
+/// about which reaches the model (Codex had a regression where only
+/// `structuredContent` was forwarded), so both channels carry the same
+/// information instead of splitting results and metadata between them.
+pub struct ToolOutput {
+    pub text: String,
+    pub structured: Value,
+}
+
+impl ToolOutput {
+    pub fn new(text: impl Into<String>, structured: Value) -> Self {
+        Self { text: text.into(), structured }
+    }
+}
+
 pub trait Handler {
     fn list_tools(&self) -> Value;
-    fn call_tool(&mut self, name: &str, args: &Value) -> Result<String, String>;
+    fn call_tool(&mut self, name: &str, args: &Value) -> Result<ToolOutput, String>;
+    /// Server-level guidance surfaced to clients on initialize.
+    fn instructions(&self) -> Option<String> {
+        None
+    }
 }
 
 impl<H: Handler> Server<H> {
@@ -60,7 +81,11 @@ impl<H: Handler> Server<H> {
                 let raw_args = params.get("arguments").cloned().unwrap_or(json!({}));
                 let args = unwrap_params(raw_args);
                 match self.handler.call_tool(name, &args) {
-                    Ok(text) => Ok(tool_result(&text, false)),
+                    Ok(out) => Ok(json!({
+                        "content": [{"type": "text", "text": out.text}],
+                        "structuredContent": out.structured,
+                        "isError": false,
+                    })),
                     Err(e) => Ok(tool_result(&e, true)),
                 }
             }
@@ -80,11 +105,15 @@ impl<H: Handler> Server<H> {
             .and_then(|v| v.as_str())
             .unwrap_or(PROTOCOL_VERSION)
             .to_string();
-        json!({
+        let mut result = json!({
             "protocolVersion": requested,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-        })
+        });
+        if let Some(text) = self.handler.instructions() {
+            result["instructions"] = Value::String(text);
+        }
+        result
     }
 }
 

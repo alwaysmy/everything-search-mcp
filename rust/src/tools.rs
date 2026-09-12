@@ -1,11 +1,24 @@
-//! The five MCP tools, their published (flat) input schemas, and result formatting.
+//! The MCP tools: published schemas, dispatch, and the text + structured output
+//! that every tool returns.
+//!
+//! Design notes (settled in a design review):
+//!  - `category` replaces the old `everything_search_by_type` tool. The category
+//!    table is real value, but exposing it as a second search entry point made the
+//!    model choose between two tools that do the same thing, which hurts tool
+//!    selection. It is now a preset parameter of `everything_search`.
+//!  - `everything_count_stats` stays a separate tool: it returns an aggregate, not
+//!    a result list, and folding it into search behind a flag would turn the output
+//!    schema into a conditional union.
+//!  - Every tool carries `annotations` and an `outputSchema`, and returns
+//!    `structuredContent` plus text that carries the same information.
 
 use crate::everything::{
     self, Client, Item, Query, FILE_TYPE_NAMES, PERIOD_NAMES, SORT_NAMES,
 };
-use crate::jsonrpc::Handler;
+use crate::jsonrpc::{Handler, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
+use std::time::Instant;
 
 pub struct Tools {
     client: Client,
@@ -28,14 +41,6 @@ fn schema(props: Value, required: &[&str]) -> Value {
     })
 }
 
-fn tool(name: &str, description: &str, input: Value) -> Value {
-    json!({
-        "name": name,
-        "description": description,
-        "inputSchema": input,
-    })
-}
-
 fn p_string(desc: &str, default: Option<&str>) -> Value {
     match default {
         Some(d) => json!({"type": "string", "description": desc, "default": d}),
@@ -43,54 +48,259 @@ fn p_string(desc: &str, default: Option<&str>) -> Value {
     }
 }
 
+fn p_enum(desc: &str, values: &[&str], default: Option<&str>) -> Value {
+    let mut v = json!({"type": "string", "description": desc, "enum": values});
+    if let Some(d) = default {
+        v["default"] = Value::String(d.to_string());
+    }
+    v
+}
+
 fn p_int(desc: &str, default: i64, min: i64, max: i64) -> Value {
-    json!({"type": "integer", "description": desc, "default": default, "minimum": min, "maximum": max})
+    json!({"type": "integer", "description": desc, "default": default,
+           "minimum": min, "maximum": max})
 }
 
 fn p_bool(desc: &str, default: bool) -> Value {
     json!({"type": "boolean", "description": desc, "default": default})
 }
 
+/// Schema for one search hit, shared by every outputSchema that returns results.
+fn item_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "path": {"type": "string", "description": "parent directory"},
+            "full_path": {"type": "string"},
+            "type": {"type": "string", "enum": ["file", "folder"]},
+            "size": {"type": "integer", "description": "bytes; absent for folders"},
+            "modified": {"type": "string", "description": "local time, YYYY-MM-DD HH:MM:SS"}
+        },
+        "required": ["name", "path", "full_path", "type"],
+        "additionalProperties": false
+    })
+}
+
+fn results_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "the query as requested"},
+            "effective_query": {"type": "string",
+                "description": "the Everything expression actually executed, after path/category/entry_type/period expansion"},
+            "total": {"type": "integer", "description": "matching objects in the index"},
+            "total_accuracy": {"type": "string", "enum": ["exact"]},
+            "returned": {"type": "integer"},
+            "offset": {"type": "integer"},
+            "next_offset": {"type": "integer"},
+            "has_more": {"type": "boolean"},
+            "results": {"type": "array", "items": item_schema()},
+            "elapsed_ms": {"type": "number"}
+        },
+        "required": ["query", "effective_query", "total", "total_accuracy",
+                     "returned", "offset", "has_more", "results", "elapsed_ms"],
+        "additionalProperties": false
+    })
+}
+
+fn recent_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "effective_query": {"type": "string"},
+            "requested_period": {"type": "string"},
+            "effective_period": {"type": "string",
+                "description": "differs from requested_period only when auto_expand widened the window"},
+            "expanded": {"type": "boolean",
+                "description": "true when the requested window held too few results and the search was retried across all time"},
+            "total": {"type": "integer"},
+            "total_accuracy": {"type": "string", "enum": ["exact"]},
+            "returned": {"type": "integer"},
+            "has_more": {"type": "boolean"},
+            "results": {"type": "array", "items": item_schema()},
+            "elapsed_ms": {"type": "number"}
+        },
+        "required": ["query", "effective_query", "requested_period", "effective_period",
+                     "expanded", "total", "total_accuracy", "returned", "has_more",
+                     "results", "elapsed_ms"],
+        "additionalProperties": false
+    })
+}
+
+fn details_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "entries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "exists": {"type": "boolean"},
+                        "type": {"type": "string", "enum": ["file", "folder", "other"]},
+                        "size": {"type": "integer"},
+                        "modified": {"type": "string"},
+                        "entries": {"type": "integer", "description": "for folders: number listed"},
+                        "preview": {"type": "string"},
+                        "preview_truncated": {"type": "boolean"},
+                        "error": {"type": "string"}
+                    },
+                    "required": ["path", "exists"],
+                    "additionalProperties": false
+                }
+            },
+            "elapsed_ms": {"type": "number"}
+        },
+        "required": ["entries", "elapsed_ms"],
+        "additionalProperties": false
+    })
+}
+
+fn stats_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "effective_query": {"type": "string"},
+            "count": {"type": "integer"},
+            "count_accuracy": {"type": "string", "enum": ["exact"],
+                "description": "always exact: Everything reports the true total independently of how many rows are fetched"},
+            "total_size": {"type": "integer"},
+            "total_size_accuracy": {"type": "string", "enum": ["sampled"],
+                "description": "sampled: Everything's HTTP API has no aggregate/group-by, so size is summed over the fetched sample and extrapolated"},
+            "sampled": {"type": "integer"},
+            "breakdown": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "extension": {"type": "string"},
+                        "count": {"type": "integer"},
+                        "size": {"type": "integer"}
+                    },
+                    "required": ["extension", "count", "size"],
+                    "additionalProperties": false
+                }
+            },
+            "breakdown_accuracy": {"type": "string", "enum": ["sampled"]},
+            "elapsed_ms": {"type": "number"}
+        },
+        "required": ["query", "effective_query", "count", "count_accuracy", "elapsed_ms"],
+        "additionalProperties": false
+    })
+}
+
+fn tool(name: &str, description: &str, input: Value, output: Value) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": input,
+        // Every tool here is a read-only query against a local index: no writes,
+        // no network, no side effects.
+        "annotations": {
+            "title": name,
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "outputSchema": output,
+    })
+}
+
+// ---------------------------------------------------------------- query building
+
+/// Filters that compile into the Everything expression actually executed.
+struct Filters<'a> {
+    raw: &'a str,
+    category: Option<&'a str>,
+    entry_type: &'a str,
+    path: Option<&'a str>,
+    regex: bool,
+}
+
+/// Compile the typed arguments into one Everything expression.
+///
+/// Order matters: `regex:` is a search *function* that applies to everything after
+/// it, so it must come last, immediately before the caller's pattern. The path is
+/// expressed as the `path:"..."` function for the same reason — an injected
+/// literal would otherwise become part of the regex pattern.
+fn compile(f: &Filters) -> Result<String, String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(p) = f.path.filter(|p| !p.trim().is_empty()) {
+        let p = p.trim().trim_end_matches(|c| c == '\\' || c == '/');
+        parts.push(format!("path:\"{p}\""));
+    }
+    match f.entry_type {
+        "file" => parts.push("file:".to_string()),
+        "folder" => parts.push("folder:".to_string()),
+        "any" | "" => {}
+        other => return Err(format!("invalid entry_type '{other}'. Valid: file, folder, any")),
+    }
+    if let Some(c) = f.category.filter(|c| !c.trim().is_empty()) {
+        let clause = everything::file_type_query(c)
+            .ok_or_else(|| format!("invalid category '{c}'. Valid: {}", FILE_TYPE_NAMES.join(", ")))?;
+        parts.push(clause.to_string());
+    }
+    let tail = f.raw.trim();
+    if f.regex {
+        // `regex:` must sit immediately before the pattern; a separating space makes
+        // it part of the pattern and the search stops matching (verified).
+        parts.push(format!("regex:{tail}"));
+    } else if !tail.is_empty() {
+        parts.push(tail.to_string());
+    }
+    Ok(parts.join(" "))
+}
+
 // ---------------------------------------------------------------- Handler
 
 impl Handler for Tools {
+    fn instructions(&self) -> Option<String> {
+        Some(
+            "Everything file search for Windows, backed by voidtools Everything's real-time \
+             NTFS index. Prefer these tools over shell commands (dir /s, Get-ChildItem \
+             -Recurse, glob) for ANY filename lookup outside the current project: a query \
+             costs well under a millisecond. All tools are read-only. Results carry an \
+             `effective_query` field showing the exact Everything expression that ran, so \
+             an unexpected result set can be diagnosed without guessing."
+                .to_string(),
+        )
+    }
+
     fn list_tools(&self) -> Value {
         let sort_desc = format!("Sort order. One of: {}", SORT_NAMES.join(", "));
+
         let search_schema = schema(
             json!({
-                "query": p_string("Search query using Everything syntax. Examples: '*.py', 'ext:py;js', 'size:>10mb ext:log', 'dm:today ext:py'. Space = AND, | = OR, ! excludes. Prefer the 'path' parameter over embedding path: in the query.", None),
-                "path": p_string("Restrict search to this directory. Prefer this over embedding path: in the query string.", Some("")),
+                "query": p_string("Search query in Everything syntax, e.g. '*.rs', 'ext:py;js', 'size:>10mb', 'dm:today', or a regex when match_regex is set. Space = AND, | = OR, ! excludes. May be empty when a category or entry_type filter alone expresses the intent.", Some("")),
+                "category": p_enum("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause.", FILE_TYPE_NAMES, Some("")),
+                "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
+                "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
                 "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
-                "offset": p_int("Skip N results (pagination)", 0, 0, i64::MAX),
+                "offset": p_int("Skip N results (pagination)", 0, 0, 2147483647),
                 "sort": p_string(&sort_desc, Some("date-modified-desc")),
                 "match_case": p_bool("Case-sensitive search", false),
                 "match_whole_word": p_bool("Match whole words only", false),
-                "match_regex": p_bool("Treat query as a regex", false),
-                "match_path": p_bool("Match against the full path, not just the filename", false),
-                "include_total": p_bool("Also report the total number of matches. Default false to keep searches fast.", false),
+                "match_regex": p_bool("Treat query as a regular expression", false),
+                "match_path": p_bool("Match the query against the full path instead of the filename", false),
+                "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),
+                "include_total": p_bool("Also report the total match count (it is already exact and costs nothing, so this only controls whether the text form mentions it).", false),
             }),
             &["query"],
         );
 
-        let by_type_schema = schema(
-            json!({
-                "file_type": p_string(&format!("File type category. One of: {}", FILE_TYPE_NAMES.join(", ")), None),
-                "query": p_string("Additional search filter", Some("")),
-                "path": p_string("Restrict search to this directory", Some("")),
-                "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
-                "sort": p_string(&sort_desc, Some("date-modified-desc")),
-            }),
-            &["file_type"],
-        );
-
         let recent_schema = schema(
             json!({
-                "period": p_string(&format!("How recent. Options: {}. Or raw Everything syntax like 'last2hours'.", PERIOD_NAMES.join(", ")), Some("1day")),
+                "period": p_string(&format!("How recent. One of: {}. Raw Everything syntax such as 'last2hours' is also accepted.", PERIOD_NAMES.join(", ")), Some("1day")),
                 "path": p_string("Restrict to this directory path", Some("")),
                 "extensions": p_string("Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'", Some("")),
                 "query": p_string("Additional search filter", Some("")),
                 "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
-                "auto_expand": p_bool("When the time period yields fewer than max_results hits, retry without the time restriction (all time). Set false to keep a strict period.", true),
+                "auto_expand": p_bool("When the period yields fewer than max_results hits, retry across all time. The response reports whether this happened via `expanded` and `effective_period`.", true),
             }),
             &[],
         );
@@ -100,7 +310,7 @@ impl Handler for Tools {
                 "paths": json!({
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "File/folder paths to inspect (1-20). Must be absolute: the server working directory is not predictable.",
+                    "description": "Absolute file or folder paths to inspect (1-20).",
                     "minItems": 1,
                     "maxItems": 20
                 }),
@@ -111,42 +321,43 @@ impl Handler for Tools {
 
         let stats_schema = schema(
             json!({
-                "query": p_string("Search query to count/measure. Same syntax as everything_search.", None),
+                "query": p_string("Search query to count. Same syntax as everything_search.", None),
+                "category": p_enum("Restrict to a file category", FILE_TYPE_NAMES, Some("")),
+                "entry_type": p_enum("Restrict to files or folders.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict counting to this directory", Some("")),
-                "include_size": p_bool("Also calculate total size of all matching files", true),
-                "breakdown_by_extension": p_bool("Break down count and size by file extension (samples up to 500 results)", false),
-                "sample_sort": p_string(&sort_desc, Some("date-modified-desc")),
+                "include_size": p_bool("Also report total size of matching files (sampled)", true),
+                "breakdown_by_extension": p_bool("Break the sample down by extension", false),
+                "sample_sort": p_string("Sort used when sampling for the breakdown. Name sorts are rejected when a breakdown is requested, because filename sort correlates with extension and biases the sample.", Some("date-modified-desc")),
             }),
             &["query"],
         );
 
         json!({"tools": [
             tool("everything_search",
-                 "Search for files and folders instantly using voidtools Everything. Leverages Everything's real-time NTFS index for sub-millisecond search across all local and mapped drives. Supports wildcards, regex, size/date filters, extension filters, path restrictions, and content search.",
-                 search_schema),
-            tool("everything_search_by_type",
-                 "Search for files by category (audio, video, image, document, code, archive, executable, font, 3d, data) without hand-writing extension lists.",
-                 by_type_schema),
+                 "Search files and folders by name, extension, size or date using voidtools Everything's real-time NTFS index. Supports a category preset, file/folder filtering, path scoping, paging, sorting, regex and result diversification.",
+                 search_schema, results_output_schema()),
             tool("everything_find_recent",
-                 "Find files modified within a recent time period. Ideal for discovering what changed in a project, tracking recent downloads, or finding today's logs. Sorted newest-first.",
-                 recent_schema),
+                 "Find files modified within a recent time period - useful for what changed in a project, recent downloads, or today's logs. Sorted newest-first, with optional widening when the window is too narrow.",
+                 recent_schema, recent_output_schema()),
             tool("everything_file_details",
-                 "Get detailed metadata and optional content preview for specific files. Returns full path, size, dates, type. For directories: entries. For text files with preview_lines > 0: first N lines.",
-                 details_schema),
+                 "Get metadata and an optional text preview for specific paths, read from the filesystem rather than the search index. Use after a search to inspect what was found.",
+                 details_schema, details_output_schema()),
             tool("everything_count_stats",
-                 "Get count and size statistics for files matching a query without listing every file. Optionally breaks down by extension.",
-                 stats_schema),
+                 "Count and measure files matching a query without listing them. The count is exact; size and per-extension figures are sampled and labelled as such.",
+                 stats_schema, stats_output_schema()),
         ]})
     }
 
-    fn call_tool(&mut self, name: &str, args: &Value) -> Result<String, String> {
+    fn call_tool(&mut self, name: &str, args: &Value) -> Result<ToolOutput, String> {
         match name {
             "everything_search" => self.search(args),
-            "everything_search_by_type" => self.search_by_type(args),
             "everything_find_recent" => self.find_recent(args),
             "everything_file_details" => self.file_details(args),
             "everything_count_stats" => self.count_stats(args),
-            other => Err(format!("unknown tool: {other}")),
+            other => Err(format!(
+                "unknown tool: {other}. Available: everything_search, everything_find_recent, \
+                 everything_file_details, everything_count_stats"
+            )),
         }
     }
 }
@@ -170,304 +381,59 @@ fn u(args: &Value, key: &str, default: usize) -> usize {
 fn b(args: &Value, key: &str, default: bool) -> bool {
     args.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
 }
+fn opt(args: &Value, key: &str) -> Option<String> {
+    let v = s(args, key);
+    if v.trim().is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
 
 fn cap(cfg: &everything::Config, n: usize) -> usize {
     n.clamp(1, cfg.max_results_cap.max(1))
 }
 
-// ---------------------------------------------------------------- tools
-
-impl Tools {
-    fn run(&self, q: &Query) -> Result<everything::RawResponse, String> {
-        self.client.query(q)
+/// Convert hits to the structured form (null fields are omitted, not sent as null).
+fn item_json(it: &Item) -> Value {
+    let mut o = json!({
+        "name": it.name,
+        "path": it.path,
+        "full_path": it.full_path(),
+        "type": if it.is_dir { "folder" } else { "file" },
+    });
+    if let Some(sz) = it.size {
+        o["size"] = json!(sz);
     }
-
-    fn search(&mut self, args: &Value) -> Result<String, String> {
-        let query = s(args, "query");
-        if query.trim().is_empty() {
-            return Err("query is required and must not be empty".into());
-        }
-        let max = cap(self.client.config(), u(args, "max_results", 50));
-        let offset = u(args, "offset", 0);
-        let sort = s_or(args, "sort", "date-modified-desc");
-        everything::validate_sort(&sort)?;
-        let path = s(args, "path");
-        let include_total = b(args, "include_total", false);
-
-        let resp = self.run(&Query {
-            search: &query,
-            count: max,
-            offset,
-            sort: &sort,
-            ascending: !sort.ends_with("-desc"),
-            case: b(args, "match_case", false),
-            whole_word: b(args, "match_whole_word", false),
-            regex: b(args, "match_regex", false),
-            match_path: b(args, "match_path", false),
-            path: if path.trim().is_empty() { None } else { Some(path.as_str()) },
-        })?;
-
-        let items: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
-        // format_results already renders the empty case; keep the total regardless.
-        let mut out = format_results(&query, &items, offset);
-        if include_total {
-            out.push_str(&format!("\nTotal matches: {}", resp.total_results));
-        }
-        Ok(out)
+    if let Some(m) = &it.modified {
+        o["modified"] = json!(m);
     }
-
-    fn search_by_type(&mut self, args: &Value) -> Result<String, String> {
-        let kind = s(args, "file_type");
-        let ext_clause = everything::file_type_query(&kind).ok_or_else(|| {
-            format!(
-                "invalid file_type '{kind}'. Valid values: {}",
-                FILE_TYPE_NAMES.join(", ")
-            )
-        })?;
-        let extra = s(args, "query");
-        let search = if extra.trim().is_empty() {
-            ext_clause.to_string()
-        } else {
-            format!("{ext_clause} {extra}")
-        };
-        let max = cap(self.client.config(), u(args, "max_results", 50));
-        let sort = s_or(args, "sort", "date-modified-desc");
-        everything::validate_sort(&sort)?;
-        let path = s(args, "path");
-        let resp = self.run(&Query {
-            search: &search,
-            count: max,
-            offset: 0,
-            sort: &sort,
-            ascending: !sort.ends_with("-desc"),
-            case: false,
-            whole_word: false,
-            regex: false,
-            match_path: false,
-            path: if path.trim().is_empty() { None } else { Some(path.as_str()) },
-        })?;
-        let label = if extra.trim().is_empty() {
-            format!("type:{kind}")
-        } else {
-            format!("type:{kind} {extra}")
-        };
-        let items: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
-        Ok(format_results(&label, &items, 0))
-    }
-
-    fn find_recent(&mut self, args: &Value) -> Result<String, String> {
-        let period = s_or(args, "period", "1day");
-        // Accept the raw Everything syntax (`last2hours`, `last30mins`, ...) in
-        // addition to the named values, matching the Python implementation.
-        let dm: String = match everything::period_query(&period) {
-            Some(v) => v.to_string(),
-            None if period.starts_with("last") && period.len() > 4 => period.clone(),
-            None => {
-                return Err(format!(
-                    "invalid period '{period}'. Valid values: {} (or raw Everything syntax like 'last2hours')",
-                    PERIOD_NAMES.join(", ")
-                ))
-            }
-        };
-        let max = cap(self.client.config(), u(args, "max_results", 50));
-        let path = s(args, "path");
-        let path_ref = if path.trim().is_empty() { None } else { Some(path.as_str()) };
-        let extra = s(args, "query");
-        let extensions = s(args, "extensions");
-
-        let build = |with_time: bool| {
-            let mut parts: Vec<String> = Vec::new();
-            if with_time {
-                parts.push(dm.clone());
-            }
-            if !extensions.trim().is_empty() {
-                let list = extensions.replace(',', ";");
-                parts.push(format!("ext:{list}"));
-            }
-            if !extra.trim().is_empty() {
-                parts.push(extra.clone());
-            }
-            parts.join(" ")
-        };
-
-        let mut resp = self.run(&Query {
-            search: &build(true),
-            count: max,
-            offset: 0,
-            sort: "date-modified-desc",
-            ascending: false,
-            case: false,
-            whole_word: false,
-            regex: false,
-            match_path: false,
-            path: path_ref,
-        })?;
-
-        // auto_expand: the period produced fewer than requested -> retry across all time.
-        let auto_expand = b(args, "auto_expand", true);
-        let expanded = auto_expand && resp.results.len() < max && resp.total_results < max as u64;
-        if expanded {
-            resp = self.run(&Query {
-                search: &build(false),
-                count: max,
-                offset: 0,
-                sort: "date-modified-desc",
-                ascending: false,
-                case: false,
-                whole_word: false,
-                regex: false,
-                match_path: false,
-                path: path_ref,
-            })?;
-        }
-
-        let items: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
-        let mut out = format_results(&format!("recent ({period})"), &items, 0);
-        if expanded {
-            out.push_str("\n(no more results in that period - expanded to all time)");
-        }
-        Ok(out)
-    }
-
-    fn file_details(&mut self, args: &Value) -> Result<String, String> {
-        let paths = args
-            .get("paths")
-            .and_then(|v| v.as_array())
-            .ok_or("paths is required (array of absolute paths)")?;
-        if paths.is_empty() || paths.len() > 20 {
-            return Err("paths must contain 1-20 entries".into());
-        }
-        let preview = u(args, "preview_lines", 0).min(200);
-        let mut out = String::new();
-        for pv in paths {
-            let p = pv.as_str().unwrap_or("");
-            let path = Path::new(p);
-            if !path.is_absolute() {
-                out.push_str(&format!("{p}\n  error: path must be absolute\n\n"));
-                continue;
-            }
-            match std::fs::metadata(path) {
-                Ok(md) => {
-                    out.push_str(&format!("{p}\n"));
-                    if md.is_dir() {
-                        out.push_str("  type: directory\n");
-                        let mut n = 0usize;
-                        if let Ok(rd) = std::fs::read_dir(path) {
-                            let mut names: Vec<String> = rd
-                                .flatten()
-                                .take(50)
-                                .map(|e| e.file_name().to_string_lossy().to_string())
-                                .collect();
-                            names.sort();
-                            n = names.len();
-                            for name in names.iter().take(20) {
-                                out.push_str(&format!("    - {name}\n"));
-                            }
-                        }
-                        out.push_str(&format!("  entries (first {n}): {n}\n"));
-                    } else {
-                        out.push_str(&format!("  size: {} ({} bytes)\n", everything::human_size(md.len()), md.len()));
-                        out.push_str(&format!("  type: {}\n", if md.is_file() { "file" } else { "other" }));
-                        if preview > 0 {
-                            match std::fs::read(path) {
-                                Ok(bytes) => {
-                                    let text = String::from_utf8_lossy(&bytes);
-                                    let lines: Vec<&str> =
-                                        text.lines().take(preview).collect();
-                                    out.push_str("  preview:\n");
-                                    for l in lines {
-                                        out.push_str(&format!("    {l}\n"));
-                                    }
-                                }
-                                Err(e) => out.push_str(&format!("  preview unavailable: {e}\n")),
-                            }
-                        }
-                    }
-                    out.push('\n');
-                }
-                Err(e) => {
-                    out.push_str(&format!("{p}\n  error: {e}\n\n"));
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    fn count_stats(&mut self, args: &Value) -> Result<String, String> {
-        let query = s(args, "query");
-        if query.trim().is_empty() {
-            return Err("query is required".into());
-        }
-        let path = s(args, "path");
-        let include_size = b(args, "include_size", true);
-        let breakdown = b(args, "breakdown_by_extension", false);
-        let sample_sort = s_or(args, "sample_sort", "date-modified-desc");
-        // Only meaningful when we actually sample for the extension breakdown;
-        // without a breakdown this argument is inert, so do not reject it then.
-        if breakdown && (sample_sort == "name" || sample_sort == "name-desc") {
-            return Err(
-                "sample_sort 'name' is rejected: file-name sort correlates with extension and biases the sample. Use a date or size sort.".into(),
-            );
-        }
-        everything::validate_sort(&sample_sort)?;
-        let resp = self.run(&Query {
-            search: &query,
-            count: 500,
-            offset: 0,
-            sort: &sample_sort,
-            ascending: !sample_sort.ends_with("-desc"),
-            case: false,
-            whole_word: false,
-            regex: false,
-            match_path: false,
-            path: if path.trim().is_empty() { None } else { Some(path.as_str()) },
-        })?;
-
-        let total = resp.total_results;
-        let items: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
-        let mut out = format!("query: {query}\n");
-        if !path.trim().is_empty() {
-            out.push_str(&format!("path: {path}\n"));
-        }
-        out.push_str(&format!("total_count: {total}\n"));
-        if include_size {
-            let known: Vec<u64> = items.iter().filter_map(|i| i.size).collect();
-            let sum: u64 = known.iter().sum();
-            out.push_str(&format!(
-                "sampled_size: {} ({} bytes across {} sampled results)\n",
-                everything::human_size(sum),
-                sum,
-                known.len()
-            ));
-        }
-        if breakdown {
-            use std::collections::BTreeMap;
-            let mut by_ext: BTreeMap<String, (usize, u64)> = BTreeMap::new();
-            for it in &items {
-                let ext = Path::new(&it.name)
-                    .extension()
-                    .map(|e| e.to_string_lossy().to_lowercase())
-                    .unwrap_or_else(|| "(none)".into());
-                let e = by_ext.entry(ext).or_insert((0, 0));
-                e.0 += 1;
-                e.1 += it.size.unwrap_or(0);
-            }
-            out.push_str("breakdown (sampled):\n");
-            for (ext, (n, sz)) in by_ext.iter().take(30) {
-                out.push_str(&format!("  {ext:<12} {n:>5}  {}\n", everything::human_size(*sz)));
-            }
-        }
-        Ok(out)
-    }
+    o
 }
 
-// ---------------------------------------------------------------- formatting
-
-fn format_results(label: &str, items: &[Item], offset: usize) -> String {
-    if items.is_empty() {
-        return format!("No results for: {label}\n");
+/// Keep at most `n` hits per parent directory, preserving order.
+fn diversify(items: Vec<Item>, n: usize) -> Vec<Item> {
+    if n == 0 {
+        return items;
     }
-    let mut out = format!("Found {} results for: {label}\n\n", items.len());
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut out = Vec::with_capacity(items.len());
+    for it in items {
+        let key = it.path.to_lowercase();
+        let c = seen.entry(key).or_insert(0);
+        if *c < n {
+            *c += 1;
+            out.push(it);
+        }
+    }
+    out
+}
+
+fn format_items(items: &[Item], offset: usize, total: u64) -> String {
+    if items.is_empty() {
+        return "No results.\n".to_string();
+    }
+    let mut out = String::new();
     for it in items {
         let tag = if it.is_dir { "DIR " } else { "FILE" };
         let mut meta: Vec<String> = Vec::new();
@@ -484,9 +450,392 @@ fn format_results(label: &str, items: &[Item], offset: usize) -> String {
         }
     }
     out.push_str(&format!(
-        "\nShowing {} results from offset {}. Use 'offset' to paginate or refine the query.",
+        "\n{} result(s) from offset {} of {} matching (exact total).",
         items.len(),
-        offset
+        offset,
+        total
     ));
     out
+}
+
+// ---------------------------------------------------------------- tools
+
+impl Tools {
+    fn search(&mut self, args: &Value) -> Result<ToolOutput, String> {
+        let started = Instant::now();
+        let query = s(args, "query");
+        let category = opt(args, "category");
+        let entry_type = s_or(args, "entry_type", "any");
+        let path = opt(args, "path");
+        if query.trim().is_empty() && category.is_none() && entry_type == "any" {
+            return Err("query is required (or provide category / entry_type to express the filter)".into());
+        }
+        let max = cap(self.client.config(), u(args, "max_results", 50));
+        let offset = u(args, "offset", 0);
+        let sort = s_or(args, "sort", "date-modified-desc");
+        everything::validate_sort(&sort)?;
+        let regex = b(args, "match_regex", false);
+        let max_per_parent = u(args, "max_per_parent", 0);
+        let include_total = b(args, "include_total", false);
+
+        let effective = compile(&Filters {
+            raw: &query,
+            category: category.as_deref(),
+            entry_type: &entry_type,
+            path: path.as_deref(),
+            regex,
+        })?;
+
+        // Diversification needs a wider net than the page actually returned.
+        let fetch = if max_per_parent > 0 { (max * 5).min(500) } else { max };
+
+        let resp = self.client.query(&Query {
+            search: &effective,
+            count: fetch,
+            offset,
+            sort: &sort,
+            ascending: !sort.ends_with("-desc"),
+            case: b(args, "match_case", false),
+            whole_word: b(args, "match_whole_word", false),
+            regex: false, // already compiled into the expression as the regex: function
+            match_path: b(args, "match_path", false),
+            path: None, // already compiled into the expression as the path: function
+        })?;
+
+        let total = resp.total_results;
+        let all: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
+        let diversified = max_per_parent > 0;
+        let mut items = diversify(all, max_per_parent);
+        items.truncate(max);
+        let has_more = (offset as u64 + items.len() as u64) < total;
+
+        let mut text = if items.is_empty() {
+            "No results.\n".to_string()
+        } else {
+            let mut head = String::new();
+            if !query.trim().is_empty() {
+                head.push_str(&format!("query: {query}\n"));
+            }
+            if diversified {
+                head.push_str(&format!("diversified: at most {max_per_parent} per parent directory\n"));
+            }
+            head.push_str(&format!("effective query: {effective}\n\n"));
+            head.push_str(&format_items(&items, offset, total));
+            head
+        };
+        if include_total && items.is_empty() {
+            text.push_str(&format!("Total matches: {total} (exact)\n"));
+        }
+
+        let structured = json!({
+            "query": query,
+            "effective_query": effective,
+            "total": total,
+            "total_accuracy": "exact",
+            "returned": items.len(),
+            "offset": offset,
+            "next_offset": offset + items.len(),
+            "has_more": has_more,
+            "results": items.iter().map(item_json).collect::<Vec<_>>(),
+            "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+        });
+        Ok(ToolOutput::new(text, structured))
+    }
+
+    fn find_recent(&mut self, args: &Value) -> Result<ToolOutput, String> {
+        let started = Instant::now();
+        let period = s_or(args, "period", "1day");
+        // Accept the documented raw Everything syntax (last2hours, last30mins, ...).
+        let dm: String = match everything::period_query(&period) {
+            Some(v) => v.to_string(),
+            None if period.starts_with("last") && period.len() > 4 => period.clone(),
+            None => {
+                return Err(format!(
+                    "invalid period '{period}'. Valid: {} (or raw Everything syntax such as 'last2hours')",
+                    PERIOD_NAMES.join(", ")
+                ))
+            }
+        };
+        let max = cap(self.client.config(), u(args, "max_results", 50));
+        let path = opt(args, "path");
+        let extra = s(args, "query");
+        let extensions = s(args, "extensions");
+
+        let build = |with_time: bool| {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(p) = path.as_deref() {
+                let p = p.trim().trim_end_matches(|c| c == '\\' || c == '/');
+                parts.push(format!("path:\"{p}\""));
+            }
+            if with_time {
+                parts.push(dm.clone());
+            }
+            if !extensions.trim().is_empty() {
+                parts.push(format!("ext:{}", extensions.replace(',', ";")));
+            }
+            if !extra.trim().is_empty() {
+                parts.push(extra.clone());
+            }
+            parts.join(" ")
+        };
+
+        let requested_period = period.clone();
+        let mut effective = build(true);
+        let mut resp = self.client.query(&Query {
+            search: &effective,
+            count: max,
+            offset: 0,
+            sort: "date-modified-desc",
+            ascending: false,
+            case: false,
+            whole_word: false,
+            regex: false,
+            match_path: false,
+            path: None,
+        })?;
+
+        let auto_expand = b(args, "auto_expand", true);
+        let expanded = auto_expand && resp.results.len() < max && resp.total_results < max as u64;
+        if expanded {
+            effective = build(false);
+            resp = self.client.query(&Query {
+                search: &effective,
+                count: max,
+                offset: 0,
+                sort: "date-modified-desc",
+                ascending: false,
+                case: false,
+                whole_word: false,
+                regex: false,
+                match_path: false,
+                path: None,
+            })?;
+        }
+
+        let total = resp.total_results;
+        let items: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
+        let effective_period = if expanded { "all time".to_string() } else { requested_period.clone() };
+
+        let mut text = format!(
+            "recent: requested {requested_period}, effective {effective_period}{}\n",
+            if expanded { "  (window too narrow - widened to all time)" } else { "" }
+        );
+        text.push_str(&format!("effective query: {effective}\n\n"));
+        text.push_str(&format_items(&items, 0, total));
+
+        let structured = json!({
+            "query": extra,
+            "effective_query": effective,
+            "requested_period": requested_period,
+            "effective_period": effective_period,
+            "expanded": expanded,
+            "total": total,
+            "total_accuracy": "exact",
+            "returned": items.len(),
+            "has_more": (items.len() as u64) < total,
+            "results": items.iter().map(item_json).collect::<Vec<_>>(),
+            "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+        });
+        Ok(ToolOutput::new(text, structured))
+    }
+
+    fn file_details(&mut self, args: &Value) -> Result<ToolOutput, String> {
+        let started = Instant::now();
+        let paths = args
+            .get("paths")
+            .and_then(|v| v.as_array())
+            .ok_or("paths is required (array of absolute paths)")?;
+        if paths.is_empty() || paths.len() > 20 {
+            return Err("paths must contain 1-20 entries".into());
+        }
+        let preview = u(args, "preview_lines", 0).min(200);
+        let mut entries: Vec<Value> = Vec::new();
+        let mut text = String::new();
+
+        for pv in paths {
+            let p = pv.as_str().unwrap_or("");
+            let pathref = Path::new(p);
+            text.push_str(&format!("{p}\n"));
+            if !pathref.is_absolute() {
+                text.push_str("  error: path must be absolute\n\n");
+                entries.push(json!({"path": p, "exists": false,
+                                    "error": "path must be absolute"}));
+                continue;
+            }
+            match std::fs::metadata(pathref) {
+                Ok(md) => {
+                    let mut e = json!({"path": p, "exists": true});
+                    if md.is_dir() {
+                        e["type"] = json!("folder");
+                        text.push_str("  type: directory\n");
+                        let mut names: Vec<String> = Vec::new();
+                        if let Ok(rd) = std::fs::read_dir(pathref) {
+                            for ent in rd.flatten().take(500) {
+                                names.push(ent.file_name().to_string_lossy().to_string());
+                            }
+                        }
+                        names.sort();
+                        e["entries"] = json!(names.len());
+                        text.push_str(&format!("  entries: {}\n", names.len()));
+                        for n in names.iter().take(20) {
+                            text.push_str(&format!("    - {n}\n"));
+                        }
+                    } else {
+                        e["type"] = json!(if md.is_file() { "file" } else { "other" });
+                        e["size"] = json!(md.len());
+                        text.push_str(&format!(
+                            "  size: {} ({} bytes)\n",
+                            everything::human_size(md.len()),
+                            md.len()
+                        ));
+                        if preview > 0 {
+                            match std::fs::read(pathref) {
+                                Ok(bytes) => {
+                                    let lossy = String::from_utf8_lossy(&bytes);
+                                    let mut it = lossy.lines();
+                                    let lines: Vec<&str> = it.by_ref().take(preview).collect();
+                                    let truncated = it.next().is_some();
+                                    let joined = lines.join("\n");
+                                    e["preview"] = json!(joined);
+                                    e["preview_truncated"] = json!(truncated);
+                                    text.push_str("  preview:\n");
+                                    for l in &lines {
+                                        text.push_str(&format!("    {l}\n"));
+                                    }
+                                    if truncated {
+                                        text.push_str("  (preview truncated)\n");
+                                    }
+                                }
+                                Err(err) => {
+                                    e["error"] = json!(err.to_string());
+                                    text.push_str(&format!("  preview unavailable: {err}\n"));
+                                }
+                            }
+                        }
+                    }
+                    entries.push(e);
+                    text.push('\n');
+                }
+                Err(err) => {
+                    text.push_str(&format!("  error: {err}\n\n"));
+                    entries.push(json!({"path": p, "exists": false, "error": err.to_string()}));
+                }
+            }
+        }
+        let structured = json!({
+            "entries": entries,
+            "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+        });
+        Ok(ToolOutput::new(text, structured))
+    }
+
+    fn count_stats(&mut self, args: &Value) -> Result<ToolOutput, String> {
+        let started = Instant::now();
+        let query = s(args, "query");
+        let category = opt(args, "category");
+        let entry_type = s_or(args, "entry_type", "any");
+        if query.trim().is_empty() && category.is_none() {
+            return Err("query is required".into());
+        }
+        let path = opt(args, "path");
+        let include_size = b(args, "include_size", true);
+        let breakdown = b(args, "breakdown_by_extension", false);
+        let sample_sort = s_or(args, "sample_sort", "date-modified-desc");
+        // Only meaningful when a breakdown is actually sampled.
+        if breakdown && (sample_sort == "name" || sample_sort == "name-desc") {
+            return Err(
+                "sample_sort 'name' is rejected: filename sort correlates with extension and \
+                 biases the sample. Use a date or size sort."
+                    .into(),
+            );
+        }
+        everything::validate_sort(&sample_sort)?;
+
+        let effective = compile(&Filters {
+            raw: &query,
+            category: category.as_deref(),
+            entry_type: &entry_type,
+            path: path.as_deref(),
+            regex: false,
+        })?;
+
+        // count=1 is enough for an exact total; a wider sample is only needed when
+        // size or a per-extension breakdown is requested.
+        let sample = if include_size || breakdown { 500 } else { 1 };
+        let resp = self.client.query(&Query {
+            search: &effective,
+            count: sample,
+            offset: 0,
+            sort: &sample_sort,
+            ascending: !sample_sort.ends_with("-desc"),
+            case: false,
+            whole_word: false,
+            regex: false,
+            match_path: false,
+            path: None,
+        })?;
+
+        let total = resp.total_results;
+        let items: Vec<Item> = resp.results.into_iter().map(Item::from).collect();
+
+        let mut structured = json!({
+            "query": query,
+            "effective_query": effective,
+            "count": total,
+            "count_accuracy": "exact",
+            "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+        });
+        let mut text = format!("count: {total} (exact)\neffective query: {effective}\n");
+
+        if include_size {
+            let known: Vec<u64> = items.iter().filter_map(|i| i.size).collect();
+            let sum: u64 = known.iter().sum();
+            if known.is_empty() || known.len() as u64 >= total {
+                structured["total_size"] = json!(sum);
+                structured["total_size_accuracy"] = json!("exact");
+                text.push_str(&format!("total size: {} ({} bytes, exact)\n", everything::human_size(sum), sum));
+            } else {
+                // Extrapolate from the sample, and say so.
+                let avg = sum as f64 / known.len() as f64;
+                let est = (avg * total as f64) as u64;
+                structured["total_size"] = json!(est);
+                structured["total_size_accuracy"] = json!("sampled");
+                structured["sampled"] = json!(known.len());
+                text.push_str(&format!(
+                    "total size: ~{} ({} bytes, sampled from {} of {} files)\n",
+                    everything::human_size(est),
+                    est,
+                    known.len(),
+                    total
+                ));
+            }
+        }
+
+        if breakdown {
+            use std::collections::BTreeMap;
+            let mut by_ext: BTreeMap<String, (usize, u64)> = BTreeMap::new();
+            for it in &items {
+                let ext = Path::new(&it.name)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_else(|| "(none)".into());
+                let e = by_ext.entry(ext).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += it.size.unwrap_or(0);
+            }
+            let list: Vec<Value> = by_ext
+                .iter()
+                .map(|(ext, (n, sz))| json!({"extension": ext, "count": n, "size": sz}))
+                .collect();
+            text.push_str(&format!("breakdown (sampled from {} of {} files):\n", items.len(), total));
+            for (ext, (n, sz)) in by_ext.iter().take(40) {
+                text.push_str(&format!("  {ext:<12} {n:>6}  {}\n", everything::human_size(*sz)));
+            }
+            structured["breakdown"] = json!(list);
+            structured["breakdown_accuracy"] = json!("sampled");
+            structured["sampled"] = json!(items.len());
+        }
+
+        Ok(ToolOutput::new(text, structured))
+    }
 }

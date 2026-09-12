@@ -1,7 +1,7 @@
 # everything-search-mcp — Rust implementation
 
 A native MCP stdio server for [voidtools Everything](https://www.voidtools.com/).
-**No Python runtime, no `es.exe` subprocess, no SDK DLL.** Single ~360 KB executable.
+**No Python runtime, no `es.exe` subprocess, no SDK DLL.** Single ~580 KB executable.
 
 This is the **active** implementation. The Python package at the repository root
 is retained for reference only and is **no longer maintained** — it is not a
@@ -24,6 +24,40 @@ To run it as a drop-in replacement for the Python server, put the binary on
 `PATH` as `everything-search-mcp.exe` (the MCP server name) and optionally also
 as `everything-mcp.exe` (the pre-rename command name) so that existing client
 configuration keeps working unchanged.
+
+`deploy.ps1` does the build and the deployment in one step: it copies the binary
+into the skill directory (`~\.agents\skills\everything-search\bin`) and then makes
+`~\.local\bin\everything-search-mcp.exe` and `everything-mcp.exe` **hard links** to
+it, so the copy on `PATH` can never drift from the skill's binary. A running MCP
+server holds its own image open, so a redeploy renames the old binary aside
+(Windows allows renaming a running executable) rather than deleting it.
+
+## Client configuration
+
+The binary configures clients for you, because it already knows its own absolute
+path — no hand-written `command` path, and nothing breaks when the skill moves:
+
+```bash
+everything-search-mcp config                 # show what each client on this machine needs
+everything-search-mcp config --write         # apply it (every file backed up first)
+everything-search-mcp config --target dsh --write
+everything-search-mcp config --json          # machine readable
+```
+
+Known targets, each with its own file format: `dsh` (DeepSeek Harness loader
+patch YAML), `claude` (Claude Code), `claude-desktop`, `codex` (TOML), `gemini`,
+`cursor`, `vscode` (`servers` rather than `mcpServers`), and `json` for anything
+else. With no `--target` it acts on exactly those clients whose config file
+already exists, and it probes the Everything HTTP server on the way so a
+misconfiguration is visible immediately.
+
+Writing nothing unless `--write` is given is deliberate: this reads and rewrites
+other programs' configuration files, and it should not do that silently. The
+writers are also conservative — a DSH entry is replaced line-wise inside the
+hand-maintained YAML so comments survive, a Codex table is replaced up to the next
+table header, JSON is merged with its BOM preserved, an unparsable JSON file is
+left alone with an error instead of being reformatted, and re-running is a no-op
+after the first successful write.
 
 ## Measured performance
 
@@ -69,6 +103,12 @@ Three notes that are easy to get wrong:
 - Responses are UTF-8 and **carry no `Content-Length`**, so the body is read to
   EOF (`Connection: Close`). The lack of keep-alive is irrelevant on loopback:
   a fresh connection still costs well under a millisecond.
+- Everything returns `date_modified` as a raw Windows **FILETIME, i.e. UTC**, not
+  as a string and not in local time. Rendered as-is it was 8 hours behind what
+  Explorer shows on a UTC+8 machine — a silent error in exactly the field a
+  "what changed recently" answer is built on. It is shifted into local time with
+  one `GetTimeZoneInformation` call, which is the only `unsafe` in the crate;
+  `modified` therefore matches Explorer and needs no correction downstream.
 
 Everything's HTTP server must be enabled. For a local-only client it should be
 restricted to loopback, since by default it can bind all interfaces and serve
@@ -206,11 +246,15 @@ package; `EVERYTHING_ES_PATH` is meaningless here because no `es.exe` is used.
 ```
 rust/
   Cargo.toml        2 dependencies (serde, serde_json); lto + strip + panic=abort
+  deploy.ps1        build, then install into the skill dir + hard-link onto PATH
   src/
-    main.rs         entry point, --help/--version, env config
+    main.rs         entry point: no args = MCP stdio server, else the CLI
     jsonrpc.rs      MCP stdio protocol, flat-schema tools, params compat shim
-    everything.rs   HTTP transport, query constants, FILETIME conversion
+    everything.rs   HTTP transport, query constants, FILETIME conversion, timezone
+    filetype.rs     name-level classification and header sniffing
     tools.rs        the five tools, schemas, result formatting
+    cli.rs          one-shot search/recent/count/details, so the exe works with no MCP
+    setup.rs        `config`: emit or apply the client configuration for this exe
 ```
 
 Unknown `period` and `file_type` values are rejected with a clear error rather

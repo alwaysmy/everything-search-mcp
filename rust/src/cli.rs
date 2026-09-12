@@ -21,6 +21,8 @@ everything-search-mcp - Everything file search, as an MCP server or a one-shot C
   everything-search-mcp recent [flags]               files changed recently
   everything-search-mcp count <query> [flags]        exact count, optional size
   everything-search-mcp details <path>... [flags]    metadata and a triage preview
+  everything-search-mcp config [flags]               print or apply the MCP client config
+                                                     for this exe (see `config --help`)
   everything-search-mcp --version | --help
 
 Flags
@@ -64,6 +66,7 @@ pub fn dispatch(argv: &[String]) -> Option<i32> {
             Some(0)
         }
         "search" | "recent" | "count" | "details" => Some(run(cmd, &argv[1..])),
+        "config" | "mcp-config" => Some(crate::setup::dispatch(&argv[1..])),
         other => {
             eprintln!("everything-search-mcp: unknown command '{other}'\n");
             eprint!("{USAGE}");

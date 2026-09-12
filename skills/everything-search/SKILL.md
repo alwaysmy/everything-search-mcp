@@ -30,15 +30,18 @@ skill 目录搬走也不会失效。
 <本 skill 目录>\bin\everything-search-mcp.exe config            # 只看：列出本机有哪些客户端 + 该粘什么
 <本 skill 目录>\bin\everything-search-mcp.exe config --write    # 应用：自动写进各客户端配置（先备份）
 <本 skill 目录>\bin\everything-search-mcp.exe config --target dsh --write
+<本 skill 目录>\bin\everything-search-mcp.exe config --target opencode --name 旧名字 --remove
 <本 skill 目录>\bin\everything-search-mcp.exe config --json     # 机器可读
 ```
 
 - 默认只处理**本机已存在**的配置文件：`dsh`(DeepSeek Harness) `claude`(Claude Code)
-  `claude-desktop` `codex` `gemini` `cursor` `vscode`，外加 `json`（纯打印一段通用块）。
+  `claude-desktop` `codex` `gemini` `cursor` `vscode` `opencode`，外加 `json`（纯打印一段通用块）。
 - 每个被改动的文件先备份成 `<原名>.bak-<UTC 时间戳>Z`；只替换自己那一条条目，
   其它条目/注释原样保留；重复运行第二次是 no-op。
+- `--remove` 是反向操作：把这一条条目删掉（同样是先备份）。**改了 server 名字时用它**，
+  否则客户端里会同时存在新旧两条，工具被注册两遍。
 - 输出里会顺带探测 Everything 是否可达、当前索引了多少对象。
-- **不带 `--write` 时一个字节都不写**。
+- **不带 `--write` / `--remove` 时一个字节都不写**。
 - 更多安装/排错细节见同目录 `INSTALL.md`。
 
 > **给 AI 的提示**：只有当用户明确要求"配置/安装 everything MCP"时才动配置。

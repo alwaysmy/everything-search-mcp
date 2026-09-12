@@ -1,6 +1,6 @@
 [package]
 name = "everything-search-mcp"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Everything file search MCP server for Windows - zero Python, no es.exe subprocess"
 license = "MIT"

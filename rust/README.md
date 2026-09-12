@@ -41,14 +41,16 @@ path — no hand-written `command` path, and nothing breaks when the skill moves
 everything-search-mcp config                 # show what each client on this machine needs
 everything-search-mcp config --write         # apply it (every file backed up first)
 everything-search-mcp config --target dsh --write
+everything-search-mcp config --target opencode --name old-name --remove
 everything-search-mcp config --json          # machine readable
 ```
 
 Known targets, each with its own file format: `dsh` (DeepSeek Harness loader
 patch YAML), `claude` (Claude Code), `claude-desktop`, `codex` (TOML), `gemini`,
-`cursor`, `vscode` (`servers` rather than `mcpServers`), and `json` for anything
-else. With no `--target` it acts on exactly those clients whose config file
-already exists, and it probes the Everything HTTP server on the way so a
+`cursor`, `vscode` (`servers` rather than `mcpServers`), `opencode` (`mcp`, a
+one-element `command` array, `type: local`, `environment`), and `json` for
+anything else. With no `--target` it acts on exactly those clients whose config
+file already exists, and it probes the Everything HTTP server on the way so a
 misconfiguration is visible immediately.
 
 Writing nothing unless `--write` is given is deliberate: this reads and rewrites
@@ -58,6 +60,10 @@ hand-maintained YAML so comments survive, a Codex table is replaced up to the ne
 table header, JSON is merged with its BOM preserved, an unparsable JSON file is
 left alone with an error instead of being reformatted, and re-running is a no-op
 after the first successful write.
+
+`--remove` is the inverse, for when the server name changes: without it a client
+that was configured under the old name keeps that entry too, and the same tool
+set gets registered twice.
 
 ## Measured performance
 

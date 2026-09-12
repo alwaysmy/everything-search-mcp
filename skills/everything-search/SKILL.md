@@ -178,6 +178,35 @@ skill 目录搬走也不会失效。
 
 非法排序值会被拒绝（不会静默回退）。
 
+## 大小写 / 全词 / 精确：优先用**函数**，不要用参数
+
+Everything 有一组**匹配修饰函数**，直接写在 `query` 里，**所有工具都自动支持**
+（`count_stats`、`find_recent`、`batch` 都能用），因为它们属于查询串，不走 HTTP 参数那条路：
+
+| 函数 | 作用 | 本机实测（`README` / `read`） |
+|---|---|---|
+| `case:` | 大小写敏感 | `README` 67964 → `case:README` **44675** |
+| `nocase:` | 显式不敏感（默认） | `nocase:README` 67964 |
+| `wholeword:` / `ww:` | 全词匹配 | `read` 141836 → `wholeword:read` **7574** |
+| `exact:` | 精确匹配整个名字 | `exact:README` 4164 |
+
+```text
+case:README                     # 只有大写 README
+wholeword:read                  # read 不匹配 thread / already / spread
+path:D:\src wholeword:read      # 和 path 函数正常组合
+case:README regex:^README       # 和正则也能共存（函数在 regex: 前后都行）
+```
+
+`case:` 与 HTTP 的 `&case=1` 实测**结果完全相同**（都是 44675），而且函数优先级更高 ——
+`case:README` 同时传 `&case=0` 仍然是 44675。
+
+> **那 `match_case` / `match_whole_word` 参数什么时候还要用？**
+> **只有正则查询需要。** 正则模式下整串会被当成模式解析，函数边界不再可靠，
+> 所以 `everything_search(query="^README\.md$", match_regex=true, match_case=true)`
+> 是唯一必须走参数的组合。非正则场景请一律用函数 —— 它跨工具通用。
+>
+> 无论走哪条路，**回传的 `match_modes` 都会告诉你哪些标志真的生效了**。
+
 ## 常用 Everything 语法
 
 ```text
@@ -196,6 +225,8 @@ empty:                        # 空文件夹
 content:TODO ext:py           # 内容搜索：需要 Everything 开启内容索引，否则恒返回 0
 regex:^test_.*\.py$           # 正则（或用 match_regex 参数）
 parent:C:\src ext:py          # src 下一层
+case:README                   # 大小写敏感（见上一节，所有工具通用）
+wholeword:read                # 全词匹配
 ```
 
 ## 文件类别覆盖的扩展名

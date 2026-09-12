@@ -327,15 +327,15 @@ impl Handler for Tools {
 
         let search_schema = schema(
             json!({
-                "query": p_string("Search query in Everything syntax, e.g. '*.rs', 'ext:py;js', 'size:>10mb', 'dm:today', or a regex when match_regex is set. Space = AND, | = OR, ! excludes. May be empty when a category or entry_type filter alone expresses the intent.", Some("")),
+                "query": p_string("Search query in Everything syntax, e.g. '*.rs', 'ext:py;js', 'size:>10mb', 'dm:today', or a regex when match_regex is set. Space = AND, | = OR, ! excludes. May be empty when a category or entry_type filter alone expresses the intent. Matching is case-insensitive by default; use the search FUNCTIONS instead of the match_* parameters where you can, because functions work in every tool: 'case:README' (case-sensitive), 'wholeword:read' (whole words only), 'exact:name' (whole name). The match_* parameters exist only because functions are unreliable inside a regex.", Some("")),
                 "category": p_enum(&format!("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause. {cats_desc}."), &cats, Some("")),
                 "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
                 "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
                 "offset": p_int("Skip N results (pagination)", 0, 0, 2147483647),
                 "sort": p_string(&sort_desc, Some("date-modified-desc")),
-                "match_case": p_bool("Case-sensitive search", false),
-                "match_whole_word": p_bool("Match whole words only", false),
+                "match_case": p_bool("Case-sensitive search. Prefer the `case:` search function inside query - it works in every tool, including everything_count_stats and everything_find_recent, which have no match_* parameters. This parameter is for regex searches, where functions are unreliable.", false),
+                "match_whole_word": p_bool("Match whole words only. Prefer the `wholeword:` (or `ww:`) search function inside query, which works in every tool. This parameter is for regex searches.", false),
                 "match_regex": p_bool("Treat query as a regular expression", false),
                 "match_path": p_bool("Match the query against the full path instead of the filename", false),
                 "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),

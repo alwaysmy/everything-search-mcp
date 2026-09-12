@@ -737,9 +737,10 @@ impl Tools {
         let started = Instant::now();
         let period = s_or(args, "period", "1day");
         // Accept the documented raw Everything syntax (last2hours, last30mins, ...).
+        // Either branch produces a full `dm:` expression; see `period_query`.
         let dm: String = match everything::period_query(&period) {
             Some(v) => v.to_string(),
-            None if period.starts_with("last") && period.len() > 4 => period.clone(),
+            None if period.starts_with("last") && period.len() > 4 => format!("dm:{period}"),
             None => {
                 return Err(format!(
                     "invalid period '{period}'. Valid: {} (or raw Everything syntax such as 'last2hours')",

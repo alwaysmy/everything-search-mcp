@@ -53,11 +53,19 @@ the SDK DLL. Measured on this machine:
 | SDK2 `Everything64.dll` | 27.77 ms |
 | `es.exe` subprocess | 60.24 ms |
 
-Two notes that are easy to get wrong:
+Three notes that are easy to get wrong:
 
-- Everything's HTTP API **ignores its `path=` and `folder=` parameters**. To
-  scope a search to a directory, the quoted literal path must be prefixed to the
-  search string (`"D:\dir" *.py`). This is what the `path` argument compiles to.
+- Everything's HTTP API **ignores its `path=` and `folder=` parameters**. A
+  directory scope must be expressed with the `path:"..."` search **function**.
+  It has to be a function rather than a quoted literal, because under regex
+  matching the whole search text becomes the pattern and an injected literal
+  path would be read as part of it — that combination silently returned zero
+  results until it was fixed.
+- For the same reason `match_regex` compiles to the `regex:` **function**, not to
+  Everything's `&regex=1` flag, so that it composes with `path:`.
+- `match_path` maps to Everything's `p=1` switch. That parameter is absent from
+  the HTTP documentation; it was confirmed live (274 → 25686 results for a term
+  that occurs only in paths).
 - Responses are UTF-8 and **carry no `Content-Length`**, so the body is read to
   EOF (`Connection: Close`). The lack of keep-alive is irrelevant on loopback:
   a fresh connection still costs well under a millisecond.
@@ -87,6 +95,27 @@ Five tools, matching the Python implementation's surface:
 Input schemas are **flat** (as the Python 1.1.0 release intended). The server
 additionally **accepts a `params`-wrapped argument object** so that clients
 holding a stale cached schema keep working.
+
+## Differences from the Python implementation
+
+A 34-shape comparison against the Python server shows 30 identical outcomes.
+The remaining four are deliberate or immaterial:
+
+- **Errors are reported with `isError: true`.** The Python server catches
+  exceptions and returns them as ordinary result text with `isError: false`.
+  Both reject the same inputs; Rust follows the MCP specification instead of a
+  text convention. A client that greps for `"Error:"` in the body would need
+  updating.
+- Tie-breaking among equal sort keys can differ; the result *sets* match.
+- Two Python-era dependencies are gone by construction: `EVERYTHING_ES_PATH`
+  (no `es.exe`) and `EVERYTHING_INSTANCE` (the HTTP server targets the default
+  instance). `EVERYTHING_HTTP_URL` replaces them.
+
+Everything else — `path` scoping, paging via `offset`, all 14 sort values,
+`match_case`, `match_whole_word`, `match_regex`, `match_path`, `include_total`,
+all 10 `file_type` categories, all 19 `period` values plus raw `last…` syntax,
+`extensions` with either separator, `auto_expand`, and the
+`sample_sort`/`file_type`/`period` validation rules — behaves the same.
 
 ## Configuration
 

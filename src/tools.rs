@@ -87,6 +87,40 @@ fn item_schema() -> Value {
     })
 }
 
+/// Argument names `everything_search` understands.
+const SEARCH_ARGS: &[&str] = &[
+    "query", "category", "entry_type", "path", "max_results", "offset", "sort", "match_case",
+    "match_whole_word", "match_regex", "match_path", "max_per_parent", "include_total", "probe",
+];
+
+/// Describe arguments the caller sent that this tool does not know about.
+///
+/// Unknown arguments are ignored, which is the right default for the occasional
+/// client that attaches metadata — but it means a misspelled parameter name is
+/// invisible: the call either fails for an unrelated-looking reason or, worse,
+/// silently runs a broader search than intended. This is only consulted while a
+/// validation error is already being built, so a well-formed call pays nothing.
+fn unknown_args_hint(args: &Value, known: &[&str]) -> String {
+    let unknown: Vec<&String> = match args.as_object() {
+        Some(m) => m.keys().filter(|k| !known.contains(&k.as_str())).collect(),
+        None => return String::new(),
+    };
+    if unknown.is_empty() {
+        return String::new();
+    }
+    let mut s = format!(
+        "\nNote: argument(s) not understood by this tool and therefore ignored: {}.",
+        unknown.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", ")
+    );
+    for u in &unknown {
+        if let Some(k) = known.iter().find(|k| k.contains(u.as_str()) || u.contains(*k)) {
+            s.push_str(&format!(" '{u}' looks like a misspelling of '{k}'."));
+        }
+    }
+    s.push_str(&format!("\nAccepted arguments: {}.", known.join(", ")));
+    s
+}
+
 fn results_output_schema() -> Value {
     json!({
         "type": "object",
@@ -619,7 +653,12 @@ impl Tools {
         let entry_type = s_or(args, "entry_type", "any");
         let path = opt(args, "path");
         if query.trim().is_empty() && category.is_none() && entry_type == "any" {
-            return Err("query is required (or provide category / entry_type to express the filter)".into());
+            // A wrong parameter name lands here: query empty, nothing to filter by.
+            // Say what arrived, or the caller cannot tell a typo from a real misuse.
+            return Err(format!(
+                "query is required (or provide category / entry_type to express the filter){}",
+                unknown_args_hint(args, SEARCH_ARGS)
+            ));
         }
         let max = cap(self.client.config(), u(args, "max_results", 50));
         let offset = u(args, "offset", 0);
@@ -773,17 +812,23 @@ impl Tools {
     fn find_recent(&mut self, args: &Value) -> Result<ToolOutput, String> {
         let started = Instant::now();
         let period = s_or(args, "period", "1day");
-        // Accept the documented raw Everything syntax (last2hours, last30mins, ...).
-        // Either branch produces a full `dm:` expression; see `period_query`.
+        // Accept the documented raw Everything syntax (last2hours, last30mins, ...)
+        // and the numeric spellings the engine takes (7days, 24hours). Either branch
+        // produces a full `dm:` expression; see `period_query`.
         let dm: String = match everything::period_query(&period) {
             Some(v) => v.to_string(),
             None if period.starts_with("last") && period.len() > 4 => format!("dm:{period}"),
-            None => {
-                return Err(format!(
-                    "invalid period '{period}'. Valid: {} (or raw Everything syntax such as 'last2hours')",
-                    PERIOD_NAMES.join(", ")
-                ))
-            }
+            None => match everything::numeric_period(&period) {
+                Some(v) => v,
+                None => {
+                    return Err(format!(
+                        "invalid period '{period}'. Valid: {} — or any numeric form the \
+                         engine takes ('7days', '24hours', '90days') or raw Everything \
+                         syntax such as 'last2hours'",
+                        PERIOD_NAMES.join(", ")
+                    ))
+                }
+            },
         };
         let max = cap(self.client.config(), u(args, "max_results", 50));
         let path = opt(args, "path");

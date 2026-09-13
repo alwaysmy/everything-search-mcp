@@ -60,11 +60,31 @@ if (Test-Path $BinDir) {
     }
 }
 
-# The renamed-aside binaries are still mapped by whatever is running from them,
-# so this only succeeds once that process is gone.
+# Sweep up the renamed-aside binaries.
+#
+# This usually cannot succeed, and that is worth saying out loud rather than
+# swallowing. The rename-and-relink sequence above leaves the `.old` name and the
+# live name pointing at the SAME file, and a running MCP server has that file
+# mapped as its executable image - Windows refuses to unlink any name for it, so
+# a silent `-ErrorAction SilentlyContinue` here just hid the litter. They are
+# free to delete once nothing is running from that file, which in practice means
+# the next deploy after a restart.
+$blocked = @()
 foreach ($dir in @((Split-Path $skillExe), $BinDir)) {
-    Get-ChildItem "$dir\everything*.exe.old" -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
+    foreach ($f in (Get-ChildItem "$dir\everything*.exe.old" -Force -ErrorAction SilentlyContinue)) {
+        try {
+            Remove-Item $f.FullName -Force -ErrorAction Stop
+            Write-Host "swept   $($f.FullName)"
+        } catch {
+            $blocked += $f.FullName
+        }
+    }
+}
+if ($blocked.Count -gt 0) {
+    Write-Host ""
+    Write-Host "kept    $($blocked.Count) renamed-aside binarie(s) - a running MCP server still maps them:"
+    $blocked | ForEach-Object { Write-Host "          $_" }
+    Write-Host "        (harmless; they clear on the next deploy after that server restarts)"
 }
 
 Write-Host ""

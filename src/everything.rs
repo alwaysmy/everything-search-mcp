@@ -115,6 +115,35 @@ pub const PERIOD_NAMES: &[&str] = &[
     "yesterday", "1day", "3days", "1week", "2weeks", "1month", "3months", "6months", "1year",
 ];
 
+/// Translate the numeric spellings Everything itself understands.
+///
+/// Everything accepts any `last<N><unit>` — `last7days`, `last24hours`,
+/// `last90days` all work — and those are the obvious synonyms for the named
+/// periods. An agent that asks for `7days` is right and this tool was wrong to
+/// refuse it: the named list only exists for convenience, and it was being
+/// enforced as a closed set. `1week` and `7days` are the same window.
+pub fn numeric_period(period: &str) -> Option<String> {
+    let digits: String = period.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let unit = match &period[digits.len()..] {
+        "min" | "mins" | "minute" | "minutes" => "mins",
+        "h" | "hr" | "hrs" | "hour" | "hours" => "hours",
+        "d" | "day" | "days" => "days",
+        "w" | "week" | "weeks" => "weeks",
+        "mo" | "month" | "months" => "months",
+        _ => return None,
+    };
+    let n: u64 = digits.parse().ok()?;
+    if n == 0 {
+        return None; // `last0days` is accepted by Everything and means nothing
+    }
+    // Everything spells the singular without the trailing s: last1day, last1hour.
+    let unit = if n == 1 { unit.trim_end_matches('s') } else { unit };
+    Some(format!("dm:last{n}{unit}"))
+}
+
 // ---------------------------------------------------------------- response
 
 #[derive(Debug, Deserialize)]
@@ -592,6 +621,35 @@ mod tests {
             "x[[]y",
         ] {
             assert_eq!(regex_syntax_problem(ok), None, "should accept {ok:?}");
+        }
+    }
+
+    #[test]
+    fn numeric_periods_are_accepted_like_the_engine_does() {
+        // Everything takes any `last<N><unit>`; refusing the numeric spelling was
+        // this tool being stricter than the engine, and it cost an agent a failed
+        // call for asking "7days" instead of "1week".
+        assert_eq!(numeric_period("7days").as_deref(), Some("dm:last7days"));
+        assert_eq!(numeric_period("1week").as_deref(), Some("dm:last1week"));
+        assert_eq!(numeric_period("24hours").as_deref(), Some("dm:last24hours"));
+        assert_eq!(numeric_period("90days").as_deref(), Some("dm:last90days"));
+        assert_eq!(numeric_period("1d").as_deref(), Some("dm:last1day"));
+        assert_eq!(numeric_period("30min").as_deref(), Some("dm:last30mins"));
+        assert_eq!(numeric_period("1hour").as_deref(), Some("dm:last1hour"));
+        assert_eq!(numeric_period("2mo").as_deref(), Some("dm:last2months"));
+
+        // Not numeric periods: leave them to the named table or the error path.
+        assert_eq!(numeric_period("7"), None);
+        assert_eq!(numeric_period("7fortnights"), None);
+        assert_eq!(numeric_period("days"), None);
+        assert_eq!(numeric_period("0days"), None);
+        assert_eq!(numeric_period("last7days"), None);
+
+        // The singular spelling the engine wants must match the named table's.
+        for p in PERIOD_NAMES {
+            if let (Some(named), Some(numeric)) = (period_query(p), numeric_period(p)) {
+                assert_eq!(named, numeric, "{p} disagreed between the two spellings");
+            }
         }
     }
 

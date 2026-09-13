@@ -94,6 +94,12 @@ skill 目录搬走也不会失效。
 **不要**包一层 `params` —— 服务端为了兼容老客户端虽然也接受 `{"params": {...}}`，
 但正确写法是平铺。
 
+> **参数名写错会被点名。** 未知参数一律被忽略，所以写错名字**不会**报"未知参数"，
+> 而是表现为别的问题 —— 典型是把 `entry_type` 写成 `type`，于是 query 为空，
+> 报的是 `query is required`，看起来像"没给查询"。
+> 现在**报错里会列出你实际传了哪些不认识的参数，并指出近似拼写**：
+> `'type' looks like a misspelling of 'entry_type'`。看到这段就直接改名字，不要绕路。
+
 ## `everything_search` 关键参数
 
 | 参数 | 说明 |
@@ -142,7 +148,10 @@ skill 目录搬走也不会失效。
 
 - `period`：默认 `1day`。可选 `1min` `5min` `10min` `15min` `30min` `1hour` `2hours` `6hours`
   `12hours` `today` `yesterday` `1day` `3days` `1week` `2weeks` `1month` `3months`
-  `6months` `1year`，或原始语法如 `last2hours`。非法值会被明确拒绝。
+  `6months` `1year`。
+  **也接受任意数值写法**：`7days`、`24hours`、`90days`、`1d`、`30min`、`2mo` ——
+  底层 Everything 本来就支持 `last<N><单位>`，上面的名单只是便捷别名，
+  `7days` 和 `1week` 是同一个窗口。或直接写原始语法 `last2hours`。真正的垃圾值才会被拒绝。
 - `extensions`：`py,js,ts` 或 `py;js;ts` 都行。
 - `auto_expand`：默认 true。窗口内结果太少时**自动放宽到全部时间**。
 - **注意回传的 `requested_period` / `effective_period` / `expanded`** ——

@@ -174,6 +174,16 @@ Four things that are easy to get wrong, all of them found the hard way:
 - Responses are UTF-8 and carry no `Content-Length`, so the body is read to EOF
   (`Connection: Close`). The lack of keep-alive is irrelevant on loopback: a
   fresh connection still costs well under a millisecond.
+- **The index can hold a phantom entry for a deleted hard link.** When one inode
+  has several names and one of them is deleted, Everything keeps that path — the
+  file is still alive under its other name, so nothing looks removed. Deleting the
+  *last* link clears it normally. This is easy to run into: `deploy.ps1` replaces
+  a running executable by renaming it aside and relinking, which leaves one inode
+  under two names, so the `.old` name becomes a ghost the moment it is unlinked.
+  Reproduced in a few lines and fixed the same way. The index remains the
+  authority for *search*, but for "does this path really exist" the answer is
+  `everything_file_details`, which reads the filesystem. To clear a ghost, create
+  and delete a file at that path.
 
 Unknown `sort` and `period` values are rejected with a clear error rather than
 being passed through, and `sample_sort=name` is refused when a breakdown is

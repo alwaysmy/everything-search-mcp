@@ -74,6 +74,14 @@ foreach ($dir in @((Split-Path $skillExe), $BinDir)) {
     foreach ($f in (Get-ChildItem "$dir\everything*.exe.old" -Force -ErrorAction SilentlyContinue)) {
         try {
             Remove-Item $f.FullName -Force -ErrorAction Stop
+            # Unlinking one of several names for the same file leaves Everything's
+            # index holding a path that no longer exists - the file is still alive
+            # under its other name, so nothing looks removed. A clean create+delete
+            # at that path (a fresh file, no other links) makes the index drop the
+            # entry. Nothing here requires Everything to be running; it only
+            # matters when it is.
+            Set-Content -LiteralPath $f.FullName -Value '' -Encoding ascii -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
             Write-Host "swept   $($f.FullName)"
         } catch {
             $blocked += $f.FullName

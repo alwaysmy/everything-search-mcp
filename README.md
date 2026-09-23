@@ -155,6 +155,19 @@ The `url` argument **replaces** the default set rather than adding to it, so
   contents. Absence from the index is not proof the file is gone — network drives
   and excluded folders never appear in it.
 
+### What several machines cost
+
+Queries run in parallel, so a search takes about as long as the **slowest**
+instance rather than the sum of all of them. Loopback answers in about a
+millisecond, so a machine on a fast LAN adds nearly nothing; one reached over a
+VPN or a Tailscale link answers in tens of milliseconds and then accounts for the
+whole total. Measured here: local alone 2.3 ms, local plus a Tailscale instance
+41 ms (p90 112 ms) — the link is the difference, not the fan-out.
+
+An instance you need only occasionally is therefore worth registering with
+`--disabled`: it stays discoverable, because the tools list it by name in their
+`url` description, and costs nothing until a call names it.
+
 ### Managing instances
 
 ```powershell

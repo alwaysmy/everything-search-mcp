@@ -139,10 +139,35 @@ fn item_schema() -> Value {
             "format": {"type": "string", "description": "friendly format name, e.g. rust, pdf, png"},
             "type_source": {"type": "string", "enum": ["extension", "magic", "heuristic"]},
             "source": {"type": "string",
-                "description": "which index this hit came from: \"local\" for this machine, otherwise the registered server name or its host:port. The path is a path ON THAT MACHINE - it is not a file here, and everything_file_details will not find it unless you pass the same url."}
+                "description": "which index this hit came from: \"local\" for this machine, otherwise the registered server name or its host:port. Present only when several instances were searched; with one, every hit is from that one. A non-local path is a path ON THAT MACHINE - it is not a file here, and everything_file_details will not find it unless you pass the same url."}
         },
-        "required": ["name", "path", "full_path", "type", "kind", "content_mode", "type_source", "source"],
+        "required": ["name", "path", "full_path", "type", "kind", "content_mode", "type_source"],
         "additionalProperties": false
+    })
+}
+
+/// One entry per Everything instance that answered, or failed to.
+///
+/// Declared in every output schema because a client validating `structuredContent`
+/// against a schema that lacks a field the server sends rejects the whole response
+/// (`additionalProperties: false`), which is a worse failure than any it prevents.
+fn backend_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "one entry per instance queried; present only when several were",
+        "items": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string"},
+                "url": {"type": "string"},
+                "total": {"type": "integer",
+                    "description": "that instance's exact count; absent when it could not be reached"},
+                "returned": {"type": "integer"},
+                "error": {"type": "string", "description": "why that instance contributed nothing"}
+            },
+            "required": ["source", "url", "returned"],
+            "additionalProperties": false
+        }
     })
 }
 
@@ -196,8 +221,11 @@ fn results_output_schema() -> Value {
             "total_accuracy": {"type": "string", "enum": ["exact"]},
             "returned": {"type": "integer"},
             "offset": {"type": "integer"},
+            "offset_scope": {"type": "string", "enum": ["per instance"],
+                "description": "present only when several instances were queried: offset applies to each of them separately, and next_offset advances by the largest page returned"},
             "next_offset": {"type": "integer"},
             "has_more": {"type": "boolean"},
+            "backends": backend_schema(),
             "results": {"type": "array", "items": item_schema()},
             "elapsed_ms": {"type": "number"}
         },
@@ -222,6 +250,7 @@ fn recent_output_schema() -> Value {
             "total_accuracy": {"type": "string", "enum": ["exact"]},
             "returned": {"type": "integer"},
             "has_more": {"type": "boolean"},
+            "backends": backend_schema(),
             "results": {"type": "array", "items": item_schema()},
             "elapsed_ms": {"type": "number"}
         },
@@ -256,6 +285,12 @@ fn details_output_schema() -> Value {
                         "preview_bytes": {"type": "integer"},
                         "preview_truncated": {"type": "boolean"},
                         "preview_skipped": {"type": "string", "description": "why no preview was produced"},
+                        "source": {"type": "string",
+                            "description": "which machine's index answered; absent when the path was read from this machine's filesystem"},
+                        "source_url": {"type": "string"},
+                        "resolved_from": {"type": "string", "enum": ["index"],
+                            "description": "present when the answer came from a remote instance's index rather than from a filesystem, so size and modified are real but the header sniff and preview are not available"},
+                        "preview_unavailable": {"type": "string"},
                         "error": {"type": "string"}
                     },
                     "required": ["path", "exists"],
@@ -299,6 +334,7 @@ fn stats_output_schema() -> Value {
                 }
             },
             "breakdown_accuracy": {"type": "string", "enum": ["exact", "sampled"]},
+            "backends": backend_schema(),
             "elapsed_ms": {"type": "number"}
         },
         "required": ["query", "effective_query", "count", "count_accuracy", "elapsed_ms"],
@@ -840,14 +876,20 @@ fn cap(cfg: &everything::Config, n: usize) -> usize {
 ///
 /// Classification here is extension-only on purpose: touching the filesystem per
 /// result would turn one index lookup into N file operations.
-fn item_json(it: &Item, source: &str) -> Value {
+fn item_json(it: &Item, source: Option<&str>) -> Value {
     let mut o = json!({
         "name": it.name,
         "path": it.path,
         "full_path": it.full_path(),
         "type": if it.is_dir { "folder" } else { "file" },
-        "source": source,
     });
+    // Only when several instances answered. With one, every hit is from it, and
+    // emitting the field anyway would break every client whose cached output schema
+    // predates it: `additionalProperties: false` rejects the entire response, which
+    // is a far worse failure than the ambiguity the field removes.
+    if let Some(s) = source {
+        o["source"] = json!(s);
+    }
     if it.is_dir {
         o["kind"] = json!("folder");
         o["content_mode"] = json!("unknown");
@@ -1134,9 +1176,16 @@ impl Tools {
         let returned = total_returned(&groups);
         let step = page_step(&groups);
         let has_more = any_has_more(&groups, offset);
+        // Several instances is the only case that needs a label or a per-machine
+        // breakdown, and it is the only case a client with an older cached schema
+        // cannot reach - so the single-instance response stays exactly as it was.
+        let multi = groups.len() > 1;
         let results: Vec<Value> = groups
             .iter()
-            .flat_map(|g| g.items.iter().map(move |i| item_json(i, g.name())))
+            .flat_map(|g| {
+                let src = if multi { Some(g.name()) } else { None };
+                g.items.iter().map(move |i| item_json(i, src))
+            })
             .collect();
 
         // One instance with nothing to show keeps the terse answer it always gave;
@@ -1174,7 +1223,6 @@ impl Tools {
             "effective_query": effective,
             "match_modes": match_modes,
             "probes": probes,
-            "backends": groups.iter().map(Group::json).collect::<Vec<_>>(),
             "total": total,
             "total_accuracy": "exact",
             "returned": returned,
@@ -1184,10 +1232,10 @@ impl Tools {
             "results": results,
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
-        // Only with several instances, so the single-instance shape is unchanged.
-        // `offset` then applies to each instance separately, and a caller that reads it
-        // as one global cursor would page wrongly.
-        if groups.len() > 1 {
+        if multi {
+            structured["backends"] = json!(groups.iter().map(Group::json).collect::<Vec<_>>());
+            // `offset` then applies to each instance separately, and a caller reading
+            // it as one global cursor would page wrongly.
             structured["offset_scope"] = json!("per instance");
         }
         Ok(ToolOutput::new(text, structured))
@@ -1287,9 +1335,13 @@ impl Tools {
 
         let total = summed_total(&groups);
         let returned = total_returned(&groups);
+        let multi = groups.len() > 1;
         let results: Vec<Value> = groups
             .iter()
-            .flat_map(|g| g.items.iter().map(move |i| item_json(i, g.name())))
+            .flat_map(|g| {
+                let src = if multi { Some(g.name()) } else { None };
+                g.items.iter().map(move |i| item_json(i, src))
+            })
             .collect();
         let effective_period = if expanded { "all time".to_string() } else { requested_period.clone() };
 
@@ -1300,13 +1352,12 @@ impl Tools {
         text.push_str(&format!("effective query: {effective}\n\n"));
         text.push_str(&render_groups(&groups, 0));
 
-        let structured = json!({
+        let mut structured = json!({
             "query": extra,
             "effective_query": effective,
             "requested_period": requested_period,
             "effective_period": effective_period,
             "expanded": expanded,
-            "backends": groups.iter().map(Group::json).collect::<Vec<_>>(),
             "total": total,
             "total_accuracy": "exact",
             "returned": returned,
@@ -1314,6 +1365,9 @@ impl Tools {
             "results": results,
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
+        if multi {
+            structured["backends"] = json!(groups.iter().map(Group::json).collect::<Vec<_>>());
+        }
         Ok(ToolOutput::new(text, structured))
     }
 
@@ -1663,9 +1717,11 @@ impl Tools {
             "effective_query": effective,
             "count": total,
             "count_accuracy": "exact",
-            "backends": groups.iter().map(Group::json).collect::<Vec<_>>(),
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
+        if multi {
+            structured["backends"] = json!(groups.iter().map(Group::json).collect::<Vec<_>>());
+        }
         let mut text = if multi {
             let mut t = format!(
                 "count: {total} (exact - the sum of {reachable} of {} indexes)\n\

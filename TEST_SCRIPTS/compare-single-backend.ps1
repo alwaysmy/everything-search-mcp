@@ -17,8 +17,9 @@
 
   比对规则：
     - 文本输出逐字节比较。
-    - JSON 输出先剔除「按设计新增」的字段再比较：backends / source / source_url /
-      resolved_from / preview_unavailable，以及 elapsed_ms（每次都不同，不是行为）。
+    - JSON 输出只剔除 `elapsed_ms`（每次都不同，不是行为）。**其余字段一律必须一致** ——
+      单后端时不允许新增任何字段：客户端的 outputSchema 带 `additionalProperties: false`，
+      多一个未声明的字段会让它拒掉**整个响应**。
   退出码：0 = 全部一致；1 = 有差异（差异详情打印在 stdout）。
 #>
 param(
@@ -39,9 +40,8 @@ if (-not (Test-Path $BaselineExe)) { throw "baseline exe not found: $BaselineExe
 if (-not (Test-Path $NewExe)) { throw "new exe not found: $NewExe" }
 $env:EVERYTHING_SERVERS_FILE = $ServersFile
 
-# Fields that exist only because of the multi-backend change. Everything else must
-# match the baseline exactly.
-$newByDesign = 'backends', 'source', 'source_url', 'resolved_from', 'preview_unavailable', 'elapsed_ms'
+# The only field excluded: a wall-clock measurement, different on every run.
+$newByDesign = 'elapsed_ms'
 
 function Get-Normalized($value) {
   if ($null -eq $value) { return $null }
@@ -54,7 +54,9 @@ function Get-Normalized($value) {
     return [PSCustomObject]$o
   }
   if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
-    return @($value | ForEach-Object { Get-Normalized $_ })
+    # `,` keeps a one-element array an array: PowerShell otherwise unwraps it, and a
+    # scalar compared against an array reports a difference that is not there.
+    return , @($value | ForEach-Object { Get-Normalized $_ })
   }
   return $value
 }

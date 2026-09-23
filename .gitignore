@@ -9,3 +9,7 @@ Thumbs.db
 
 # Left behind by deploy.ps1 when it renames a binary that is still running
 *.exe.old
+
+# Python bytecode caches, left on disk by the frozen Python implementation
+__pycache__/
+*.pyc

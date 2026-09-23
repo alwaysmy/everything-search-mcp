@@ -133,6 +133,11 @@ The `url` argument **replaces** the default set rather than adding to it, so
   address, and every hit carries a `source` field. That is not decoration: a path
   from another computer looks exactly like a local one, so without the label
   `E:\manuals\x.pdf` reads as a file here.
+- **With one machine the response is unchanged** — no grouping header, no
+  `source`, no `backends[]`. That matters beyond tidiness: a client validating
+  `structuredContent` against a cached output schema rejects the whole response
+  when it meets an undeclared field (`additionalProperties: false`), so a field
+  that only carries information when several machines answer must only exist then.
 - **Paths are paths on the machine that answered.** They cannot be read from here,
   and `everything_file_details` will not find them unless it is given the same
   `url`.

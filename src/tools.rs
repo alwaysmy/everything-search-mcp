@@ -555,14 +555,7 @@ fn resolve_backends(base: &Config, args: &Value) -> Result<Vec<Backend>, String>
                 config: base.retarget(w)?,
             }
         } else if w.eq_ignore_ascii_case(servers::LOCAL) {
-            // Naming it explicitly overrides its switch: the switch governs the
-            // default set, and asking for it by name is not a default.
-            let url = reg.get(servers::LOCAL).map(|e| e.url.clone()).unwrap_or_else(servers::local_url);
-            Backend {
-                name: servers::LOCAL.to_string(),
-                config: base.retarget(&url)?,
-                url,
-            }
+            local_backend(base, &reg)?
         } else {
             let e = reg.get(w).ok_or_else(|| {
                 let known = reg.names();
@@ -591,6 +584,44 @@ fn resolve_backends(base: &Config, args: &Value) -> Result<Vec<Backend>, String>
 
 fn backend_for(base: &Config, e: &servers::Entry) -> Result<Backend, String> {
     Ok(Backend { name: e.name.clone(), url: e.url.clone(), config: base.retarget(&e.url)? })
+}
+
+/// This machine as an instance: the address registered for `local` if there is one,
+/// otherwise `EVERYTHING_HTTP_URL` and then the loopback default.
+///
+/// Its switch is deliberately not consulted. The switch governs *the default search
+/// set*, and neither asking for `local` by name nor a single-machine tool's default
+/// is that - in both cases the caller named this machine, so a switched-off `local`
+/// must still answer.
+fn local_backend(base: &Config, reg: &servers::Registry) -> Result<Backend, String> {
+    let url = reg
+        .get(servers::LOCAL)
+        .map(|e| e.url.clone())
+        .unwrap_or_else(servers::local_url);
+    Ok(Backend { name: servers::LOCAL.to_string(), config: base.retarget(&url)?, url })
+}
+
+/// The one instance a single-machine tool (`everything_file_details`) runs against.
+///
+/// An omitted `url` means **this machine**, which is what that tool's own `url`
+/// description promises - not the default search set. Those differ: the search
+/// default is every enabled instance, and feeding it to a tool that inspects one
+/// machine turns registering a remote instance into a hard error on every call that
+/// did not name one. A configuration change must not break an unrelated tool.
+fn resolve_single_backend(base: &Config, args: &Value) -> Result<Backend, String> {
+    if args.get("url").filter(|v| !v.is_null()).is_none() {
+        let reg = servers::Registry::load()?;
+        return local_backend(base, &reg);
+    }
+    let mut backends = resolve_backends(base, args)?;
+    if backends.len() > 1 {
+        return Err(format!(
+            "everything_file_details inspects one machine at a time, but {} were named. \
+             Name a single url, or call it once per machine.",
+            backends.len()
+        ));
+    }
+    backends.pop().ok_or_else(|| "url named no instance to inspect".to_string())
 }
 
 /// A display name for an address that was passed directly instead of by name.
@@ -1387,16 +1418,9 @@ impl Tools {
 
         // One machine at a time: the same path means different things on different
         // machines, and an answer covering several would not say which one it
-        // described.
-        let backends = resolve_backends(self.client.config(), args)?;
-        if backends.len() > 1 {
-            return Err(format!(
-                "everything_file_details inspects one machine at a time, but {} were named. \
-                 Name a single url, or call it once per machine.",
-                backends.len()
-            ));
-        }
-        let backend = &backends[0];
+        // described. An omitted `url` is therefore this machine, not the search
+        // default of every enabled instance.
+        let backend = resolve_single_backend(self.client.config(), args)?;
         let remote = !is_loopback(&backend.config);
 
         let mut entries: Vec<Value> = Vec::new();
@@ -1422,7 +1446,7 @@ impl Tools {
             // Its size and mtime are real - Everything stores them - but nothing here
             // reads the file, so the sniff and the preview are not available.
             if remote {
-                entries.push(self.index_details(backend, p, preview, &mut text));
+                entries.push(self.index_details(&backend, p, preview, &mut text));
                 continue;
             }
             match std::fs::metadata(pathref) {
@@ -1954,5 +1978,84 @@ impl Tools {
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
         Ok(ToolOutput::new(text, structured))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `EVERYTHING_SERVERS_FILE` is process-wide, so tests that set it take turns
+    /// instead of overwriting each other's registry file from parallel threads.
+    static REGISTRY_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A registry of our own, for the duration of one test. The real one under
+    /// `%APPDATA%` is never read or written.
+    struct TestRegistry {
+        file: std::path::PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl TestRegistry {
+        fn new(body: &str) -> Self {
+            let guard = REGISTRY_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let mut file = std::env::temp_dir();
+            file.push(format!("evmcp-test-registry-{}.json", std::process::id()));
+            std::fs::write(&file, body).expect("write the test registry");
+            std::env::set_var(servers::ENV_FILE, &file);
+            Self { file, _guard: guard }
+        }
+    }
+
+    impl Drop for TestRegistry {
+        fn drop(&mut self) {
+            std::env::remove_var(servers::ENV_FILE);
+            let _ = std::fs::remove_file(&self.file);
+        }
+    }
+
+    #[test]
+    fn a_single_machine_tool_defaults_to_this_machine() {
+        let _reg = TestRegistry::new(
+            r#"{"servers":[{"name":"workshop","url":"http://10.0.0.2:23333","enabled":true}]}"#,
+        );
+        let base = Config::from_url(everything::DEFAULT_URL).expect("the default parses");
+
+        // Omitted url: this machine. A registered, enabled remote instance must not
+        // turn every unqualified call into "2 were named" - the search default is
+        // every enabled instance, but this tool inspects exactly one.
+        let b = resolve_single_backend(&base, &json!({})).expect("an omitted url resolves");
+        assert_eq!(b.name, servers::LOCAL);
+        assert_eq!(b.config.address(), "127.0.0.1:23333");
+
+        // A registered remote instance is still what its name selects.
+        let b = resolve_single_backend(&base, &json!({"url": "workshop"}))
+            .expect("a registered name resolves");
+        assert_eq!(b.name, "workshop");
+        assert_eq!(b.config.address(), "10.0.0.2:23333");
+
+        // An address resolves without the registry, as it does for search.
+        let b = resolve_single_backend(&base, &json!({"url": "http://10.0.0.9:23333"}))
+            .expect("an address resolves");
+        assert_eq!(b.config.address(), "10.0.0.9:23333");
+
+        // Two machines cannot be described by one answer, and that stays refused.
+        let err = resolve_single_backend(&base, &json!({"url": ["local", "workshop"]}))
+            .expect_err("two machines must be refused");
+        assert!(err.contains("one machine at a time"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_switched_off_local_still_answers_a_single_machine_tool() {
+        let _reg = TestRegistry::new(
+            r#"{"servers":[{"name":"local","url":"http://127.0.0.1:23999","enabled":false}]}"#,
+        );
+        let base = Config::from_url(everything::DEFAULT_URL).expect("the default parses");
+
+        // The switch governs the default *search* set. A single-machine tool's
+        // default names this machine, so switching `local` off must not silence it.
+        let b = resolve_single_backend(&base, &json!({})).expect("the default resolves");
+        assert_eq!(b.name, servers::LOCAL);
+        assert_eq!(b.config.address(), "127.0.0.1:23999", "a registered local address wins");
     }
 }

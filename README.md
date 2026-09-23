@@ -141,6 +141,10 @@ The `url` argument **replaces** the default set rather than adding to it, so
 - **Paths are paths on the machine that answered.** They cannot be read from here,
   and `everything_file_details` will not find them unless it is given the same
   `url`.
+- **`everything_file_details` inspects one machine, so an omitted `url` means this
+  one.** The search default — every enabled instance — is not a set a single-machine
+  tool can use, so registering a remote instance never turns an unqualified call into
+  "several were named".
 - **`total` is the sum of the per-machine totals**, each of which is exact, so the
   sum is too. Every machine also reports its own count in `backends[]`.
 - **`offset` applies to each machine separately** — `offset_scope: "per instance"`

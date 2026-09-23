@@ -75,6 +75,14 @@ notice.
 - **`url` replaces the default instance set; it never adds to it.** Naming one
   machine must not also return another machine's rows, and the caller cannot tell
   from the result that it happened.
+- **A single-machine tool's default is `local`, not the enabled set.**
+  `everything_file_details` describes one machine, and an omitted `url` means *this*
+  machine — what its own `url` description promises. Reusing the search default
+  (every enabled instance) there made registering a remote instance an error on every
+  unqualified call: a configuration change breaking a tool that has nothing to do
+  with it. The same reasoning covers the `local` switch — it governs the *search*
+  default, so a switched-off `local` still answers when it is named or when it is
+  such a tool's default.
 - **Every hit carries `source`, and several instances are grouped rather than
   merged.** A path from another computer is textually indistinguishable from a
   local one, so an unlabelled merged list turns a remote hit into a file the

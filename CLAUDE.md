@@ -9,13 +9,16 @@ tools that answer file-search questions from Everything's live NTFS index.
 src/
   main.rs       process entry: no args -> MCP stdio server, subcommand -> CLI
   jsonrpc.rs    MCP stdio protocol, tool schemas, the params compat shim
-  everything.rs HTTP transport, query constants, FILETIME and timezone handling
+  everything.rs HTTP transport, addresses, query constants, FILETIME and timezone
+  servers.rs    the instance registry: named Everything servers and their switches
   filetype.rs   name-level type classification and 16 KB header sniffing
   tools.rs      the five tools: validation, query building, result formatting
-  cli.rs        one-shot search/recent/count/details
+  cli.rs        one-shot search/recent/count/details/servers
   setup.rs      `config`: generate or apply MCP client configuration
 skills/
   everything-search/   the agent-facing skill; ships alongside the binary
+TEST_SCRIPTS/
+  compare-single-backend.ps1   single-instance regression against a git baseline
 ```
 
 Two front ends over one implementation. `main.rs` decides, everything below it is
@@ -25,10 +28,16 @@ shared, so the CLI can never drift from the MCP server.
 
 ```powershell
 cargo build --release      # target\release\everything-search-mcp.exe
-cargo test                 # unit tests: filetype classification, time conversion
+cargo test                 # unit tests: classification, time, addresses, registry
 .\deploy.ps1               # build, install into the skill dir, hard-link onto PATH
 .\deploy.ps1 -NoBuild      # deploy what is already built
 ```
+
+`TEST_SCRIPTS\compare-single-backend.ps1 -BaselineExe <exe>` replays a batch of CLI
+calls against the current build and one compiled from a git worktree, comparing text
+byte for byte and JSON field for field. Run it after any change to the query path:
+"searching one machine is unchanged" is otherwise an assertion, and the multi-instance
+code paths are exactly the kind that quietly alter the single-instance answer.
 
 ## Invariants
 
@@ -63,6 +72,23 @@ notice.
   configuration files; the writers are line-based and conservative on purpose
   (DSH YAML keeps its comments, an unparsable JSON file is left alone with an
   error rather than reformatted).
+- **`url` replaces the default instance set; it never adds to it.** Naming one
+  machine must not also return another machine's rows, and the caller cannot tell
+  from the result that it happened.
+- **Every hit carries `source`, and several instances are grouped rather than
+  merged.** A path from another computer is textually indistinguishable from a
+  local one, so an unlabelled merged list turns a remote hit into a file the
+  caller tries to open here.
+- **`offset` is per instance; `total` is the sum of exact per-instance counts.**
+  Paging a merged list with one cursor repeats or skips rows. Both facts are stated
+  in the response (`offset_scope`, `backends[]`) rather than left to be inferred.
+- **A failure is an error only when there is one instance.** With one there is no
+  partial success to report, so it stays an ordinary tool error — the behaviour
+  single-machine callers already depend on. With several, one machine being down
+  must not withhold the others' answers.
+- **The registry is read on every call, not cached at startup.** An MCP server
+  lives for days; needing a restart to pick up a new machine would make the
+  registry useless in practice.
 
 ## Gotchas
 
@@ -76,6 +102,13 @@ notice.
 - `deploy.ps1` renames a running binary aside instead of deleting it: the MCP
   server is mapped from the file it is replacing, and DSH respawns it within a
   second of being killed.
+- Credentials in an address (`http://user:pass@host:port`) are parsed and sent as
+  Basic auth, but **no authenticated Everything instance was available to test
+  against** — the base64 encoding is unit-tested, the round trip is not.
+- A remote path's absence from an index is not evidence the file is gone:
+  Everything indexes the NTFS volumes it was pointed at, so network drives and
+  excluded folders never appear. `index_details` says this instead of reporting
+  "not found".
 
 ## History
 

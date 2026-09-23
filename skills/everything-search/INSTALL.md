@@ -109,8 +109,12 @@ Everything → **工具 → 选项 → HTTP 服务器** → 勾选「启用 HTTP
 | `--http-url` | `EVERYTHING_HTTP_URL` | `http://127.0.0.1:23333` | Everything HTTP 地址；改过端口才需要 |
 | `--timeout` | `EVERYTHING_TIMEOUT` | `30` | 单次请求超时秒数 |
 | `--max-results-cap` | `EVERYTHING_MAX_RESULTS_CAP` | `1000` | 单次返回条数硬上限（控制 token 用量） |
+| （无旗标） | `EVERYTHING_SERVERS_FILE` | `%APPDATA%\everything-search-mcp\servers.json` | 远程机器登记表的位置 |
 
 旧版的 `EVERYTHING_ES_PATH` / `EVERYTHING_INSTANCE` 已**不存在**，不要再用。
+
+要搜**别的机器**上的 Everything，用 `servers add` 登记（见 SKILL.md「搜别的机器」），
+或在调用里直接传 `url` —— 这不需要任何环境变量，也不用在那台机器上装东西。
 
 ## 3. 各客户端配置形态（手工参考）
 
@@ -226,6 +230,10 @@ MCP 侧验证：重启客户端后调用 `everything_search`，`query` 填 `*.py
 | 查询恒返回 0 条且很快 | 该语法 Everything 没索引，典型是 `content:`（见 SKILL.md 陷阱一节） |
 | 结果全是 `node_modules` | 用 `max_per_parent` 做结果多样化，或加 `path` 限定 |
 | 想确认实际执行了什么表达式 | 看结果里的 `effective_query` |
+| `unknown server 'xxx'` | 名字没登记过。`servers list` 看有哪些，或直接传地址 `http://host:23333` |
+| 远程机器报连不上 | 那台机器没开机 / Everything 没在跑 / HTTP 口没开 / 防火墙或网段不通。远程报错里给的就是这个地址，先 ping 一下 |
+| 远程命中却在本机读不到文件 | 路径属于那台机器，本机没有。详见 SKILL.md「搜别的机器」 |
+| 多机结果里的 `total` | 是各机精确计数之和；某台连不上时汇总行会写 `N index(es) unreachable`，那行不能忽略 |
 
 ## 6. 卸载
 
@@ -234,6 +242,8 @@ MCP 侧验证：重启客户端后调用 `everything_search`，`query` 填 `*.py
 #    备份文件是 *.bak-<时间戳>Z，可以直接还原
 # 2) 删掉 skill 目录即可（exe 就在 skill 里，没有装到系统任何地方）
 Remove-Item -Recurse '<本 skill 目录>'
+# 3) 远程机器登记表（可选；删掉就回到"只搜本机"）
+Remove-Item "$env:APPDATA\everything-search-mcp\servers.json"
 ```
 
 如果曾经装过 Python 版（`uv tool install` / `pip install`），可以顺手清掉：

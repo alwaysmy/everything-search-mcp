@@ -6,6 +6,9 @@ no SDK DLL** — that answers from
 [voidtools Everything](https://www.voidtools.com/)'s live NTFS index in about a
 millisecond.
 
+It searches this machine by default, and can query Everything instances running on
+other machines too — same tools, one extra `url` argument.
+
 ```
 mcp__everything-search__everything_search
 mcp__everything-search__everything_find_recent
@@ -82,6 +85,11 @@ the rest.
 | `everything_count_stats` | Count and size without listing; optional per-extension breakdown |
 | `everything_search_batch` | 1–8 searches per call, to save agent round trips |
 
+Every tool except `everything_search_batch` also takes an optional `url` naming the
+instance(s) to search — see [Searching other machines](#searching-other-machines).
+`everything_search_batch` takes it per query instead, so one call can ask several
+machines.
+
 Every result reports the Everything expression that actually ran, so a surprise
 is diagnosable instead of guessable:
 
@@ -98,6 +106,73 @@ is diagnosable instead of guessable:
 }
 ```
 
+## Searching other machines
+
+Everything's HTTP server answers on any host, so these tools can search another
+machine's index. Register the machine once:
+
+```powershell
+everything-search-mcp servers add workshop http://10.0.0.2:23333
+everything-search-mcp servers list
+```
+
+Then either let every search include it, or name it per call:
+
+```powershell
+everything-search-mcp search "*.pdf"                              # every enabled instance
+everything-search-mcp search "*.pdf" --url workshop               # only that one
+everything-search-mcp search "*.pdf" --url local --url workshop   # both, grouped
+```
+
+The `url` argument **replaces** the default set rather than adding to it, so
+"search that machine" cannot quietly also search this one.
+
+### What changes when a second machine answers
+
+- **Results are grouped per machine**, each under a header naming it and its
+  address, and every hit carries a `source` field. That is not decoration: a path
+  from another computer looks exactly like a local one, so without the label
+  `E:\manuals\x.pdf` reads as a file here.
+- **Paths are paths on the machine that answered.** They cannot be read from here,
+  and `everything_file_details` will not find them unless it is given the same
+  `url`.
+- **`total` is the sum of the per-machine totals**, each of which is exact, so the
+  sum is too. Every machine also reports its own count in `backends[]`.
+- **`offset` applies to each machine separately** — `offset_scope: "per instance"`
+  says so — and `next_offset` advances by the largest page returned, so paging
+  neither repeats nor skips rows.
+- **A machine that cannot be reached does not fail the search.** Its error appears
+  beside the answers that did come back. With a single instance there is no partial
+  success to report, so a failure is still an ordinary tool error.
+- **`everything_file_details` against a remote instance** answers from that
+  machine's index: size and modification time are real, but the header sniff and
+  the preview are not available, because the HTTP API serves the index and not file
+  contents. Absence from the index is not proof the file is gone — network drives
+  and excluded folders never appear in it.
+
+### Managing instances
+
+```powershell
+everything-search-mcp servers list                    # what is registered, and its switch
+everything-search-mcp servers add nas http://10.0.0.3:23333
+everything-search-mcp servers add nas http://10.0.0.3:23333 --disabled
+everything-search-mcp servers disable nas             # keep the entry, stop searching it
+everything-search-mcp servers remove nas
+everything-search-mcp servers path                    # where the file lives
+```
+
+A switch is remembered across restarts, so a machine that is off stays off instead
+of costing a connect timeout on every search. `local` is built in and needs no
+registration; registering it is how this machine gets its own switch and address.
+The registry is read on each call, so edits take effect without restarting the MCP
+server.
+
+> **A remote Everything is usually unauthenticated.** The default
+> `bindings=0.0.0.0` lets anyone who can reach the port list that machine's entire
+> index. Credentials can be embedded in the address
+> (`http://user:password@host:port`) for an instance configured to require them;
+> that path is implemented but not covered by the test suite.
+
 ## The same executable is also a CLI
 
 Started with no arguments it is an MCP stdio server, which is how a client spawns
@@ -109,6 +184,8 @@ everything-search-mcp search "*.py" --path D:\Projects --max 20
 everything-search-mcp recent --period 1week --path D:\Projects
 everything-search-mcp count  "ext:pdf" --exact-size
 everything-search-mcp details D:\a\b.rs --preview 20
+everything-search-mcp search "*.pdf" --url local --url workshop
+everything-search-mcp servers list
 everything-search-mcp config --write
 ```
 
@@ -153,13 +230,14 @@ only, and not a substitute for the agent's own file-reading tool.
 | `EVERYTHING_HTTP_URL` | `http://127.0.0.1:23333` | Base URL of Everything's HTTP server |
 | `EVERYTHING_TIMEOUT` | `30` | Request timeout, seconds |
 | `EVERYTHING_MAX_RESULTS_CAP` | `1000` | Hard cap on results per search |
+| `EVERYTHING_SERVERS_FILE` | `%APPDATA%\everything-search-mcp\servers.json` | Where the instance registry lives. `EVERYTHING_HTTP_URL` also supplies the address of `local` when `local` was never registered |
 
 `EVERYTHING_ES_PATH` and `EVERYTHING_INSTANCE` no longer exist: there is no
 `es.exe` to point at, and the HTTP server targets the default instance.
 
 ## Design notes
 
-Four things that are easy to get wrong, all of them found the hard way:
+Six things that are easy to get wrong, all of them found the hard way:
 
 - Everything's HTTP API **ignores its `path=` and `folder=` parameters**. A
   directory scope has to be the `path:"..."` search **function**, not a quoted
@@ -184,6 +262,11 @@ Four things that are easy to get wrong, all of them found the hard way:
   authority for *search*, but for "does this path really exist" the answer is
   `everything_file_details`, which reads the filesystem. To clear a ghost, create
   and delete a file at that path.
+- With several instances the results are **grouped rather than merged into one
+  sorted list**. A merged list cannot say which machine a bare `D:\...` came from,
+  and per-machine paging is only correct if each machine keeps its own cursor.
+  Instances that resolve to the same address are collapsed, because counting one
+  machine twice doubles every total.
 
 Unknown `sort` and `period` values are rejected with a clear error rather than
 being passed through, and `sample_sort=name` is refused when a breakdown is
@@ -197,7 +280,7 @@ client that greps the body for `"Error:"` would need updating.
 
 ```powershell
 cargo build --release      # -> target\release\everything-search-mcp.exe
-cargo test                 # 16 unit tests
+cargo test                 # 29 unit tests
 .\deploy.ps1               # build, then install into the skill dir + hard-link onto PATH
 .\deploy.ps1 -NoBuild      # deploy what is already built
 ```
@@ -213,14 +296,22 @@ deploy.ps1      build and install
 src/
   main.rs       entry point: no args = MCP stdio server, else the CLI
   jsonrpc.rs    MCP stdio protocol, flat-schema tools, params compat shim
-  everything.rs HTTP transport, query constants, FILETIME conversion, timezone
+  everything.rs HTTP transport, addresses, query constants, FILETIME, timezone
+  servers.rs    the instance registry: named Everything servers and their switches
   filetype.rs   name-level classification and header sniffing
   tools.rs      the five tools, schemas, result formatting
-  cli.rs        one-shot search/recent/count/details, so the exe works with no MCP
+  cli.rs        one-shot search/recent/count/details/servers, so the exe works with no MCP
   setup.rs      `config`: emit or apply the client configuration for this exe
 skills/
   everything-search/   the agent-facing skill (SKILL.md + INSTALL.md)
+TEST_SCRIPTS/
+  compare-single-backend.ps1   single-instance regression check against a git baseline
 ```
+
+`compare-single-backend.ps1` builds a baseline from any commit in a `git worktree`
+and replays a batch of CLI calls against both binaries, comparing text byte for
+byte and JSON field for field. It is how "searching one machine still behaves
+exactly as before" is demonstrated rather than asserted.
 
 The crate's only `unsafe` is a single `GetTimeZoneInformation` call, used to
 render `modified` in local time without pulling in a date/time dependency.

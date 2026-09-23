@@ -1,6 +1,6 @@
 ---
 name: everything-search
-description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫秒级文件搜索）。触发词：找文件、搜文件、搜索文件、查找文件、文件搜索、Everything 搜索、按类型搜索、最近文件、文件详情、文件统计、文件大小、文件数量、找 datasheet / 手册 / 文档 / 图片 / 视频 / 代码、找工程目录、找项目、这个目录里有什么、列一下文件、哪个文件包含、在文件里找、什么最占空间、大文件、重复文件、空文件夹、在哪、位置、路径。English triggers — find file, locate file, search files, where is, list files, file search, search my computer, find the config file, find a document, largest files, duplicate files, empty folders, recent changes, what changed, which file contains, grep for text, find the datasheet, file size, count files, find project, find the project folder."
+description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫秒级文件搜索）。触发词：找文件、搜文件、搜索文件、查找文件、文件搜索、Everything 搜索、按类型搜索、最近文件、文件详情、文件统计、文件大小、文件数量、找 datasheet / 手册 / 文档 / 图片 / 视频 / 代码、找工程目录、找项目、这个目录里有什么、列一下文件、哪个文件包含、在文件里找、什么最占空间、大文件、重复文件、空文件夹、在哪、位置、路径、搜别的电脑、远程搜索、另一台机器上的文件、多台机器一起搜、那台服务器上有没有。English triggers — find file, locate file, search files, where is, list files, file search, search my computer, find the config file, find a document, largest files, duplicate files, empty folders, recent changes, what changed, which file contains, grep for text, find the datasheet, file size, count files, find project, find the project folder, search another machine, search a remote computer, search multiple machines, remote Everything server."
 ---
 
 # everything-search MCP 使用指南
@@ -65,6 +65,14 @@ skill 目录搬走也不会失效。
 常用 flag：`--path` `--category` `--type file|folder` `--max` `--offset` `--sort`
 `--per-parent` `--regex` `--case` `--whole-word` `--match-path` `--total` `--probe`
 `--period` `--ext` `--preview` `--exact-size` `--breakdown` `--json`
+`--url <名字|地址>`（可重复，搜多台机器；见「搜别的机器」）
+
+```powershell
+<exe> servers list                                   # 已登记的机器与开关
+<exe> servers add <名字> <地址> [--disabled]         # 登记（首次默认打开）
+<exe> servers enable|disable|remove <名字>
+<exe> servers path                                   # 配置文件位置
+```
 
 退出码：`0` 成功、`1` 查询失败（错误在 stderr）、`2` 参数错误。
 `--json` 输出结构化结果而非文本。
@@ -84,6 +92,89 @@ skill 目录搬走也不会失效。
 
 > 老版本里的 `everything_search_by_type` **已并入 `everything_search` 的 `category` 参数**。
 > 不要再调那个工具名。
+
+## 搜别的机器（远程 Everything）
+
+Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 在跑、HTTP 口开着，
+这些工具就能直接搜它的索引。**同一个工具，多一个 `url` 参数** ——
+不需要 WinRM、不需要登录那台机器、不需要装东西。
+
+`url` 直接给地址就能用，**不登记也行**：
+
+```json
+{ "query": "*.pdf", "url": "http://10.0.0.2:23333" }
+{ "query": "*.pdf", "url": ["local", "http://10.0.0.2:23333"] }
+```
+
+用户登记过的机器可以用名字（工具描述里的 `Known names` 会列出当前有哪些）：
+
+```json
+{ "query": "*.pdf", "url": "workshop" }
+```
+
+三种取值：
+
+| `url` | 搜谁 |
+|---|---|
+| 不传 | 所有**已打开**的机器（默认只有本机） |
+| `"workshop"` 或 `"http://10.0.0.2:23333"` | 只搜这一台 |
+| `["local", "workshop"]` | 两台一起搜，结果按机器分组 |
+
+**`url` 是替换，不是追加。** 传了就只搜传的那些 —— 想"本机 + 远程"必须显式写
+`["local", "workshop"]`。这样"搜那台机器"不会偷偷把本机也搜进去。
+
+### 多机结果长什么样
+
+文本按机器分段，每段头一行是机器名和地址；结构化形式每条命中带 `source`，
+另有 `backends[]` 列出每台的 `total` / `returned` / 错误：
+
+```
+=== local (http://127.0.0.1:23333) - 842 matching
+  [FILE] D:\Projects\a.pdf  (1.2 MB, 2026-09-22 17:45:34)
+=== workshop (http://10.0.0.2:23333) - 1274 matching
+  [FILE] E:\manuals\3458A\Ag_3458A_UserGuide_en.pdf  (7.7 MB, 2026-09-23 01:27:25)
+
+4 result(s) from offset 0 across 2 of 2 indexes; 2116 matching in total (exact).
+```
+
+必须知道的几点：
+
+- **路径是那台机器上的路径，在本机打不开。** 每条结果带 `source` 就是为了这个：
+  **`source` 不是 `local` 的路径，不要拿去 read、不要拿去 `everything_file_details`**
+  （除非把同一个 `url` 也传过去）—— 否则你是在本机找一个同名的、完全不同的文件，
+  而且**不会报错**。
+- **`total` 是各机精确总数之和**，仍然精确（每台的计数本来就是精确的，相加不引入误差）。
+  各机自己的数字在 `backends[]` 里。
+- **`offset` 是"每台各自"的**（回传带 `offset_scope: "per instance"`）。
+  多机分页时 `next_offset` 按各台返回条数的**最大值**前进，所以既不重复也不跳过；
+  某一台结果不够一页时它返回空，这是正常的。
+- **某台连不上不会让整次搜索失败**：它的错误单独列在那一台下面，其它机器的结果照常返回，
+  汇总行会写 `N index(es) unreachable`。**只有单台时**失败才等于工具报错。
+- **单台时输出形状不变**（扁平列表，没有分组头）—— 只有多台才分组。
+
+### 什么时候该用多机
+
+- 用户说"**那台机器上**有没有 / **服务器上**找找" → `url` 给那一台。
+- 用户说"哪台有都行 / 都找找" → 传数组，或者不传（如果用户已经把远程机器打开了）。
+- **本机搜不到不等于没有** —— 如果用户提过有另一台机器放资料，值得带 `url` 再搜一次。
+- 别为了"更全"就无脑把远程都打开：多一台就多一次网络往返，而且结果里会混进
+  那台机器的路径，反而更难读。
+
+### 登记（用户配置动作）
+
+登记写进 `%APPDATA%\everything-search-mcp\servers.json`，开关会记住（关掉的机器保持关，
+不会每次搜索都去等它超时）：
+
+```powershell
+<exe> servers add workshop http://10.0.0.2:23333     # 登记并打开
+<exe> servers add nas http://10.0.0.3:23333 --disabled
+<exe> servers list                                   # 看登记与开关
+<exe> servers disable workshop                       # 临时摘掉，保留登记
+<exe> servers path                                   # 配置文件在哪
+```
+
+`local` 是内置的，不用登记；登记它只是给本机一个自己的开关和地址。
+配置文件**每次调用都会重读**，所以改完立刻生效，不用重启 MCP 服务端。
 
 ## 参数一律平铺在顶层
 
@@ -114,6 +205,7 @@ skill 目录搬走也不会失效。
 | `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符。**生效情况看回传的 `match_modes`**，别只看 `effective_query` |
 | **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 50 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
 | `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
+| **`url`** | 搜哪台机器：名字、地址、或数组（多台一起搜）。**替换默认集合**，详见「搜别的机器」 |
 
 ## 看 `effective_query` 自查
 
@@ -129,7 +221,11 @@ skill 目录搬走也不会失效。
 结构化客户端还能拿到 `structuredContent`，字段与文本内容一致：
 `query` / `effective_query` / `match_modes` / `total` / `total_accuracy` / `returned` /
 `offset` / `next_offset` / `has_more` / `results[]`，每条含 `name` `path` `full_path`
-`type` `size` `modified`。
+`type` `size` `modified` **`source`**；另有 `backends[]`（每台的 `source` / `url` /
+`total` / `returned` / `error`），多台时还有 `offset_scope`。
+
+> **`source` 是"这条命中来自哪个索引"**，`local` 是本机，其余是那台机器的名字或 `host:port`。
+> 非 `local` 的路径属于那台机器，在本机读不到 —— 见「搜别的机器」。
 
 > `modified` 是**本地时间**（和资源管理器显示的一致），格式 `YYYY-MM-DD HH:MM:SS`。
 > 直接报给用户即可，不要自己再加时区偏移。
@@ -138,7 +234,7 @@ skill 目录搬走也不会失效。
 
 | 量 | 精度 | 说明 |
 |---|---|---|
-| `count` / `total` | **exact** | Everything 直接报告真实总数，与取多少行无关 |
+| `count` / `total` | **exact** | Everything 直接报告真实总数，与取多少行无关。多台机器时是各机精确计数之和，仍然精确 |
 | `total_size` | **sampled** | HTTP API 没有聚合，是按取到的样本外推的，必须当成估算 |
 | 扩展名分布 | **sampled** | 同上 |
 
@@ -166,13 +262,22 @@ skill 目录搬走也不会失效。
 
 - `paths`：1–20 个路径，**必须绝对路径**。
 - `preview_lines`：0–200。文本文件的预览；`preview_truncated` 告诉你是否被截断。
+- `url`：这些路径在**哪台机器**上。**一次只能一台** —— 传多台会直接报错，
+  因为同一个路径在不同机器上是不同文件，混在一份回答里说不清描述的是哪台。
+- **远程机器**（`url` 指向别的机器）时，回答的是**那台机器索引里的元数据**：
+  大小、修改时间是真的（Everything 存了），类型是按**扩展名**判的。
+  **没有文件头嗅探、没有预览** —— HTTP 接口给的是索引，不是文件内容。
+  文本形式会写 `preview: unavailable`，结构化里是 `resolved_from: "index"` 加
+  `preview_unavailable`。**要读内容必须在那台机器上读**，别在这边猜。
+- **"索引里没有"不等于"文件不存在"**：Everything 只索引它被指到的 NTFS 卷，
+  网络盘和被排除的目录根本不在索引里。工具会这样说明，不要把它当成"文件已删除"。
 
 ## `everything_count_stats`
 
 - `count` 精确、`total_size`/`breakdown` 采样（见上）。
 - **`count: 0` 是确定的"没有"，不是"没取到"** —— 它来自 Everything 索引的精确计数，
   与取多少行无关，也**不受采样影响**。所以**不要再用递归扫盘去复核一个 0**：
-  本机 `D:\MyProjects` 递归枚举一次要 **228 秒**（275,434 个目录），
+  本机 `D:\Projects` 递归枚举一次要 **228 秒**（275,434 个目录），
   而索引回答同一个问题只要几毫秒。0 看起来像"空结果"，但这两个 0 不是一回事。
 - `sample_sort`：**开了 breakdown 时不能用 `name`**（文件名排序与扩展名相关，会带偏采样）。
 - `category` / `entry_type` / `path` 都可用来限定。
@@ -267,6 +372,12 @@ wholeword:read                # 全词匹配
 ## 陷阱与排错
 
 - **连接失败** → 检查 Everything 的 HTTP 服务器是否启用（见文首）；这是唯一的传输途径，没有兜底。
+  远程机器还要确认那台机器开着、Everything 在跑、HTTP 口对外可达。
+- **拿远程路径在本机读** → 最隐蔽的坑：`source` 不是 `local` 的路径属于别的机器，
+  在本机 read 只会报"找不到"，或者更糟 —— **本机恰好有同名路径时读到完全不同的文件，而且不报错**。
+  要元数据就把同一个 `url` 传给 `everything_file_details`；要内容只能在那台机器上读。
+- **多机结果里 `total` 是各机之和** → 它仍然精确，但"总量"跨的是多台机器，报给用户时说清楚。
+  某台连不上时汇总行会写 `N index(es) unreachable`，**那行不能忽略**，否则会把不完整的数字当全量。
 - **`total_size` 是采样** → 不要当精确值。
 - **`breakdown` 里那个数字是"样本内的行数"，不是总数** → 表头写的是 `in sample`，
   下面还有一行明说。要真实的每类数量/体积，传 `exact_size: true`。

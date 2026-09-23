@@ -13,3 +13,7 @@ Thumbs.db
 # Python bytecode caches, left on disk by the frozen Python implementation
 __pycache__/
 *.pyc
+
+# Local design-discussion transcripts. Working notes, not deliverables: they quote
+# real host addresses and machine paths verbatim.
+docs/gpt_qa/

@@ -32,7 +32,12 @@ function Clear-Target([string]$Path) {
 
 if (-not $NoBuild) {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        $env:PATH = 'D:\Rust\1.98.1\bin;' + $env:PATH
+        # Fall back to the standard rustup locations instead of one machine's layout.
+        $candidates = @($env:CARGO_HOME, (Join-Path $env:USERPROFILE '.cargo')) |
+            Where-Object { $_ } | ForEach-Object { Join-Path $_ 'bin' }
+        foreach ($bin in $candidates) {
+            if (Test-Path (Join-Path $bin 'cargo.exe')) { $env:PATH = "$bin;$env:PATH"; break }
+        }
     }
     Push-Location $root
     try { cargo build --release } finally { Pop-Location }

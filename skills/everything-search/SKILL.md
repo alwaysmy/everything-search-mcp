@@ -125,8 +125,8 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 
 ### 多机结果长什么样
 
-**只有多台时才这样**：文本按机器分段，每段头一行是机器名和地址；结构化形式每条命中带
-`source`，另有 `backends[]` 列出每台的 `total` / `returned` / 错误。
+每条命中始终带 `source`，单台也一样。多台时文本按机器分段，每段头一行是机器名和地址；
+另有 `backends[]` 列出每台的 `total` / `returned` / `consumed` / `next_offset` / 错误。
 
 ```
 === local (http://127.0.0.1:23333) - 842 matching
@@ -143,17 +143,16 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
   **`source` 不是 `local` 的路径，不要拿去 read、不要拿去 `everything_file_details`**
   （除非把同一个 `url` 也传过去）—— 否则你是在本机找一个同名的、完全不同的文件，
   而且**不会报错**。
-- **`total` 是各机精确总数之和**，仍然精确（每台的计数本来就是精确的，相加不引入误差）。
-  各机自己的数字在 `backends[]` 里。
+- **`total` 只汇总可达索引。** 任一索引失败时，`total_accuracy` 为 `partial`，
+  `total_scope` 为 `reachable indexes`。全部失败时的0不表示所有机器都无匹配。
 - **`offset` 是"每台各自"的**（回传带 `offset_scope: "per instance"`）。
-  多机分页时 `next_offset` 按各台返回条数的**最大值**前进，所以既不重复也不跳过；
-  某一台结果不够一页时它返回空，这是正常的。
+  游标按已消耗的原始行前进，包含被每目录限额跳过的行。各台游标不同则顶层
+  `next_offset` 为 null；保持查询、筛选和排序，把各条 `backends[].url` 与
+  `backends[].next_offset` 分别传入下一次单台搜索。失败索引用原offset重试。
 - **某台连不上不会让整次搜索失败**：它的错误单独列在那一台下面，其它机器的结果照常返回，
   汇总行会写 `N index(es) unreachable`。**只有单台时**失败才等于工具报错。
-- **单台时输出形状完全不变**（扁平列表，没有分组头、没有 `source`、没有 `backends[]`）——
-  只有多台才分组。这不只是好看：客户端会拿缓存的 outputSchema 校验 `structuredContent`，
-  遇到未声明的字段（`additionalProperties: false`）会**拒掉整个响应**，
-  所以"只在多台时才有意义"的字段就只能在那时出现。
+- **单台仍是扁平列表，但也含source与完整性说明。** 使用旧缓存输出schema的客户端
+  应刷新tools/list。这些新增字段和可空游标是有意的接口修正。
 
 ### 什么时候该用多机
 
@@ -237,11 +236,14 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 
 | 量 | 精度 | 说明 |
 |---|---|---|
-| `count` / `total` | **exact** | Everything 直接报告真实总数，与取多少行无关。多台机器时是各机精确计数之和，仍然精确 |
-| `total_size` | **sampled** | HTTP API 没有聚合，是按取到的样本外推的，必须当成估算 |
-| 扩展名分布 | **sampled** | 同上 |
+| `count` / `total` | **exact / partial** | 单次可达索引报告精确数；存在失败索引时汇总为partial，scope说明覆盖范围 |
+| `total_size` | **exact / unavailable** | 不外推。样本完整或exact_size完整读取且文件大小均已知时才给总和；目录消耗行但不计文件字节。缺失大小、断页、计数变化或后端失败则省略 |
+| 扩展名分布 | **sampled / exact** | 只统计最初样本；覆盖全量时才是全量分布。某类缺失大小则省略size并标unavailable |
 
-**不要把采样的体积当成精确值报给用户。**
+`exact_size`的多页遍历是实时扫描，不是原子快照；同样数量的文件在扫描中变化仍可能影响结果。
+`probe=true`会把裸词编成一个名称/路径/目录的OR查询，再由Everything统一分页和计数，
+不再只在少量结果时拼接三份首页。`max_total_results`严格限制批量输出总条数；
+每个成功子项保留完整的游标、后端错误、match_modes和总量scope。
 
 ## `everything_find_recent`
 
@@ -381,11 +383,11 @@ wholeword:read                # 全词匹配
 - **拿远程路径在本机读** → 最隐蔽的坑：`source` 不是 `local` 的路径属于别的机器，
   在本机 read 只会报"找不到"，或者更糟 —— **本机恰好有同名路径时读到完全不同的文件，而且不报错**。
   要元数据就把同一个 `url` 传给 `everything_file_details`；要内容只能在那台机器上读。
-- **多机结果里 `total` 是各机之和** → 它仍然精确，但"总量"跨的是多台机器，报给用户时说清楚。
+- **多机结果里 `total` 是可达索引之和** → 检查accuracy与scope，存在失败就不是所有所选机器的全量。
   某台连不上时汇总行会写 `N index(es) unreachable`，**那行不能忽略**，否则会把不完整的数字当全量。
-- **`total_size` 是采样** → 不要当精确值。
+- **`total_size` 不按样本外推** → 不完整就省略并说明原因；多页精确求和也不是原子快照。
 - **`breakdown` 里那个数字是"样本内的行数"，不是总数** → 表头写的是 `in sample`，
-  下面还有一行明说。要真实的每类数量/体积，传 `exact_size: true`。
+  下面还有一行明说。`exact_size: true`只扩展大小求和，不会把扩展名分布也变成全量。
 - **正则写错会被明确拒绝**（括号/字符类不配对、结尾孤立反斜杠）→ 报错而不是返回空结果。
   但**更隐蔽的正则错误 Everything 仍然静默返回 0 条**，所以正则查询得到 0 时，
   先怀疑模式本身，别直接下"没有这个文件"的结论。
@@ -401,7 +403,7 @@ wholeword:read                # 全词匹配
   删掉**最后一个**链接才正常清除。触发场景很常见：部署脚本用"改名让位 + 重建硬链接"来替换
   正在运行的可执行文件，就会造出同 inode 的两个名字。
   表现：搜 `*.old` 会返回**并不存在**的路径。
-  **要确认某个路径是否真的存在，用 `everything_file_details`** —— 它读真实文件系统，
-  不存在会报 `os error 2`，而 `exists` 字段同理。
+  **本机路径可用 `everything_file_details`确认真实文件系统。** 远端只能查索引：
+  未索引或连接失败时exists为null，另外看indexed/status；不能据此断言文件不存在。
   清掉幽灵：在那个路径上做一次干净的"创建 + 删除"即可（新 inode、无其它链接）。
 - **NTFS 之外**：exFAT/FAT/网络盘没有 MFT，Everything 只能慢速扫描，结果可能不全。

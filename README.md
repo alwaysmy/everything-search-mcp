@@ -97,11 +97,11 @@ is diagnosable instead of guessable:
 {
   "query": "*.rs",
   "effective_query": "path:\"D:\\proj\" file: ext:rs;...;hcl *.rs",
-  "total": 6, "total_accuracy": "exact",
+  "total": 6, "total_accuracy": "exact", "total_scope": "all requested indexes",
   "returned": 3, "offset": 0, "next_offset": 3, "has_more": true,
   "results": [{"name": "tools.rs", "path": "D:\\proj\\src",
                "full_path": "D:\\proj\\src\\tools.rs", "type": "file",
-               "size": 42300, "modified": "2026-09-12 16:27:55"}],
+               "source": "local", "size": 42300, "modified": "2026-09-12 16:27:55"}],
   "elapsed_ms": 0.81
 }
 ```
@@ -133,11 +133,10 @@ The `url` argument **replaces** the default set rather than adding to it, so
   address, and every hit carries a `source` field. That is not decoration: a path
   from another computer looks exactly like a local one, so without the label
   `E:\manuals\x.pdf` reads as a file here.
-- **With one machine the response is unchanged** — no grouping header, no
-  `source`, no `backends[]`. That matters beyond tidiness: a client validating
-  `structuredContent` against a cached output schema rejects the whole response
-  when it meets an undeclared field (`additionalProperties: false`), so a field
-  that only carries information when several machines answer must only exist then.
+- **Every hit is labelled, including a single selected machine.** `source` is
+  always present, and text output identifies the source as well. Clients caching
+  older output schemas should refresh `tools/list`; the additive source and
+  completeness fields are intentional contract changes.
 - **Paths are paths on the machine that answered.** They cannot be read from here,
   and `everything_file_details` will not find them unless it is given the same
   `url`.
@@ -145,11 +144,16 @@ The `url` argument **replaces** the default set rather than adding to it, so
   one.** The search default — every enabled instance — is not a set a single-machine
   tool can use, so registering a remote instance never turns an unqualified call into
   "several were named".
-- **`total` is the sum of the per-machine totals**, each of which is exact, so the
-  sum is too. Every machine also reports its own count in `backends[]`.
-- **`offset` applies to each machine separately** — `offset_scope: "per instance"`
-  says so — and `next_offset` advances by the largest page returned, so paging
-  neither repeats nor skips rows.
+- **`total` is the sum of reachable per-machine counts.** With any backend
+  failure, `total_accuracy` is `"partial"` and `total_scope` is `"reachable indexes"`.
+  Zero with every backend failed is not an exact zero across the requested set.
+- **`offset` applies to each machine separately.** A cursor advances by raw rows
+  consumed, including diversification skips, rather than by displayed row count.
+  If unfinished machines have different cursors, `next_offset` is null; copy each
+  `backends[]` entry's `url` and `next_offset` into a separate search with the same
+  query, filters and sorting. Failed backends retry their original offset. The
+  scalar cursor remains available when it can safely describe every active backend.
+  `has_more` is null if no known backend has more rows but failures leave that question unknown.
 - **A machine that cannot be reached does not fail the search.** Its error appears
   beside the answers that did come back. With a single instance there is no partial
   success to report, so a failure is still an ordinary tool error.
@@ -157,7 +161,10 @@ The `url` argument **replaces** the default set rather than adding to it, so
   machine's index: size and modification time are real, but the header sniff and
   the preview are not available, because the HTTP API serves the index and not file
   contents. Absence from the index is not proof the file is gone — network drives
-  and excluded folders never appear in it.
+  and excluded folders never appear in it. A missing index entry returns
+  `exists: null, indexed: false, status: "not_indexed"`; a failed request returns
+  null for both existence and index membership, with `status: "unreachable"`. A
+  truncated lookup with no matching row is `"incomplete"`, not proof of absence.
 
 ### What several machines cost
 
@@ -218,10 +225,46 @@ Exit codes: `0` success, `1` query failed (message on stderr), `2` bad arguments
 
 | Quantity | Accuracy |
 |---|---|
-| `count` / `total` | **exact** — Everything reports the true total regardless of how many rows are fetched, so `count_stats` asks for a single row when size is not needed |
-| `total_size`, extension breakdown | **not estimated** by default. File sizes are heavily skewed and a top-N slice is not a random sample, so extrapolating produced figures that contradicted each other (23.6 GB for a set whose PDF members alone came to 84 GB). Without `exact_size` the field is omitted and `total_size_accuracy` is `"unavailable"` |
-| `exact_size: true` | sums every match, one paged pass, capped at 200,000 rows — above the cap it says so rather than guessing. 185,892 `.txt` files summed in ~620 ms |
+| `count` / `total` | Exact for the responding indexes; **partial** when any requested index fails. `count_scope` / `total_scope` states which set is covered |
+| `total_size`, extension breakdown | **not estimated** by default. File sizes are heavily skewed and a top-N slice is not a random sample, so extrapolating produced figures that contradicted each other (23.6 GB for a set whose PDF members alone came to 84 GB). If the initial sample is incomplete, the field is omitted unless `exact_size` completes the scan; unavailable sums are labelled explicitly |
+| `exact_size: true` | Sums a complete observed pass, capped at 200,000 rows. Folders consume rows and contribute zero file bytes. Missing file sizes, failed/empty pages, changed counts or unreachable indexes make size unavailable. This is a live scan, not an atomic snapshot: same-count concurrent changes cannot be detected |
 | `modified` | **local time**, matching Explorer. Everything returns a raw FILETIME (UTC); rendered as-is it was 8 hours behind on a UTC+8 machine, which is exactly the field a "what changed recently" answer is built on |
+
+`exact_size` does not turn the extension breakdown into a full scan: that
+breakdown still describes the initial sample. An extension with missing sizes
+omits `size` and reports `size_accuracy: "unavailable"`; known sample sums use
+`"observed_sum"`. Counts and bytes are not extrapolated.
+
+### Probe and batch semantics
+
+With `probe: true`, a bare term is expanded before the request into one grouped
+name/path/folder OR expression. For example, `needle` becomes
+`<needle | path:needle | <folder: needle>>`. Typed path/category/entry filters
+remain outside that group, and match flags are preserved. This is now an explicit
+union whenever probe is enabled, rather than a thin-page-only fallback. Everything
+counts, sorts and pages the union; the client no longer merges offset-zero pages
+or invents an exact union count. The syntax follows [voidtools' search operators](https://www.voidtools.com/support/everything/search_syntax/).
+
+`max_per_parent` applies within each displayed page. `max_total_results` is a hard
+**output** budget across every query and backend in a batch; later queries are
+skipped when it is exhausted. Backend overfetch for diversification is separately
+bounded. Each successful batch entry retains the full search response, including
+cursors, match modes, total scope and backend errors. `queries_skipped` and
+`budget_exhausted` report the stop explicitly.
+
+### Transport limits
+
+The HTTP reader supports Content-Length, EOF-delimited and chunked responses.
+It rejects incomplete or ambiguous framing, a body over 16 MiB, headers over
+64 KiB, chunk metadata/trailers over 64 KiB, or a line over 8 KiB. A peer cannot extend a request indefinitely by
+sending occasional bytes: all reads share the request deadline. DNS waiting and
+TCP connection attempts share it too. OS DNS calls cannot be cancelled; at most 32
+resolver workers may remain active, and further lookups fail until one finishes.
+
+The MCP stdio dispatcher is still synchronous. It cannot process another request
+or cancellation while a tool is running. The deadline bounds each HTTP request,
+not a whole multi-page size scan or batch; those can make several requests. This
+change does not claim asynchronous dispatch or cancellation support.
 
 ## Type classification, in two levels
 
@@ -250,7 +293,7 @@ only, and not a substitute for the agent's own file-reading tool.
 | Variable | Default | Meaning |
 |---|---|---|
 | `EVERYTHING_HTTP_URL` | `http://127.0.0.1:23333` | Base URL of Everything's HTTP server |
-| `EVERYTHING_TIMEOUT` | `30` | Request timeout, seconds |
+| `EVERYTHING_TIMEOUT` | `30` | Per-HTTP-request deadline in seconds, including DNS, connection, write and read |
 | `EVERYTHING_MAX_RESULTS_CAP` | `1000` | Hard cap on results per search |
 | `EVERYTHING_SERVERS_FILE` | `%APPDATA%\everything-search-mcp\servers.json` | Where the instance registry lives. `EVERYTHING_HTTP_URL` also supplies the address of `local` when `local` was never registered |
 
@@ -318,7 +361,8 @@ deploy.ps1      build and install
 src/
   main.rs       entry point: no args = MCP stdio server, else the CLI
   jsonrpc.rs    MCP stdio protocol, flat-schema tools, params compat shim
-  everything.rs HTTP transport, addresses, query constants, FILETIME, timezone
+  everything.rs addresses, query constants, FILETIME, timezone
+  everything/http.rs bounded HTTP framing, size limits and request deadlines
   servers.rs    the instance registry: named Everything servers and their switches
   filetype.rs   name-level classification and header sniffing
   tools.rs      the five tools, schemas, result formatting
@@ -328,12 +372,23 @@ skills/
   everything-search/   the agent-facing skill (SKILL.md + INSTALL.md)
 TEST_SCRIPTS/
   compare-single-backend.ps1   single-instance regression check against a git baseline
+  mock-http-smoke.py            isolated CLI/MCP parity and optional schema validation
 ```
 
 `compare-single-backend.ps1` builds a baseline from any commit in a `git worktree`
 and replays a batch of CLI calls against both binaries, comparing text byte for
-byte and JSON field for field. It is how "searching one machine still behaves
-exactly as before" is demonstrated rather than asserted.
+byte and JSON field for field. It detects intentional contract changes as well as regressions. The source labels,
+completeness fields, corrected cursors and probe behavior in this revision produce
+expected differences from older releases; do not suppress all differences as a
+blanket acceptance rule. A live Windows/Everything comparison has not been run for
+this revision. Linux loopback tests cover the shared implementation, not Windows
+installation, real index behavior or authenticated Everything configuration.
+
+Run `cargo test --locked` and `cargo build --release --locked`. For a compiled
+binary, run `python3 TEST_SCRIPTS/mock-http-smoke.py --binary <path>`; add
+`--validate-schema` when Python `jsonschema` is installed. The fixture uses a
+temporary registry and synthetic results, and checks CLI/MCP parity plus all five
+published tool schemas without querying real user files.
 
 The crate's only `unsafe` is a single `GetTimeZoneInformation` call, used to
 render `modified` in local time without pulling in a date/time dependency.

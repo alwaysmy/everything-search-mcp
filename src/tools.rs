@@ -139,9 +139,9 @@ fn item_schema() -> Value {
             "format": {"type": "string", "description": "friendly format name, e.g. rust, pdf, png"},
             "type_source": {"type": "string", "enum": ["extension", "magic", "heuristic"]},
             "source": {"type": "string",
-                "description": "which index this hit came from: \"local\" for this machine, otherwise the registered server name or its host:port. Present only when several instances were searched; with one, every hit is from that one. A non-local path is a path ON THAT MACHINE - it is not a file here, and everything_file_details will not find it unless you pass the same url."}
+                "description": "which index this hit came from: \"local\" for this machine, otherwise the registered server name or its host:port. Always present, including single-instance searches. A non-local path is a path ON THAT MACHINE - it is not a file here, and everything_file_details will not find it unless you pass the same url."}
         },
-        "required": ["name", "path", "full_path", "type", "kind", "content_mode", "type_source"],
+        "required": ["name", "path", "full_path", "type", "kind", "content_mode", "type_source", "source"],
         "additionalProperties": false
     })
 }
@@ -163,6 +163,10 @@ fn backend_schema() -> Value {
                 "total": {"type": "integer",
                     "description": "that instance's exact count; absent when it could not be reached"},
                 "returned": {"type": "integer"},
+                "offset": {"type": "integer"},
+                "consumed": {"type": "integer", "description": "raw backend rows consumed, including diversification skips"},
+                "next_offset": {"type": "integer"},
+                "has_more": {"type": ["boolean", "null"], "description": "null when backend failed"},
                 "error": {"type": "string", "description": "why that instance contributed nothing"}
             },
             "required": ["source", "url", "returned"],
@@ -216,15 +220,17 @@ fn results_output_schema() -> Value {
             "match_modes": {"type": "array", "items": {"type": "string"},
                 "description": "match modifiers that were in effect. These travel as HTTP parameters rather than as part of the expression, so effective_query cannot show them; empty means none were set"},
             "probes": {"type": "array", "items": {"type": "string"},
-                "description": "extra queries executed by multi-probe; empty when probe was not requested"},
+                "description": "additional branches included in the engine-side probe union; empty when not applicable"},
             "total": {"type": "integer", "description": "matching objects in the index"},
-            "total_accuracy": {"type": "string", "enum": ["exact"]},
+            "total_accuracy": {"type": "string", "enum": ["exact", "partial"]},
+            "total_scope": {"type": "string", "enum": ["all requested indexes", "reachable indexes"]},
             "returned": {"type": "integer"},
             "offset": {"type": "integer"},
             "offset_scope": {"type": "string", "enum": ["per instance"],
-                "description": "present only when several instances were queried: offset applies to each of them separately, and next_offset advances by the largest page returned"},
-            "next_offset": {"type": "integer"},
-            "has_more": {"type": "boolean"},
+                "description": "present only when several instances were queried: offset applies to each separately; when raw cursors differ, next_offset is null and backends[].next_offset must be used in separate url-scoped follow-up calls"},
+            "next_offset": {"type": ["integer", "null"]},
+            "pagination_note": {"type": "string"},
+            "has_more": {"type": ["boolean", "null"], "description": "null if failed backends leave remaining results unknown"},
             "backends": backend_schema(),
             "results": {"type": "array", "items": item_schema()},
             "elapsed_ms": {"type": "number"}
@@ -247,9 +253,10 @@ fn recent_output_schema() -> Value {
             "expanded": {"type": "boolean",
                 "description": "true when the requested window held too few results and the search was retried across all time"},
             "total": {"type": "integer"},
-            "total_accuracy": {"type": "string", "enum": ["exact"]},
+            "total_accuracy": {"type": "string", "enum": ["exact", "partial"]},
+            "total_scope": {"type": "string", "enum": ["all requested indexes", "reachable indexes"]},
             "returned": {"type": "integer"},
-            "has_more": {"type": "boolean"},
+            "has_more": {"type": ["boolean", "null"], "description": "null if failed backends leave remaining results unknown"},
             "backends": backend_schema(),
             "results": {"type": "array", "items": item_schema()},
             "elapsed_ms": {"type": "number"}
@@ -271,7 +278,9 @@ fn details_output_schema() -> Value {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"},
-                        "exists": {"type": "boolean"},
+                        "exists": {"type": ["boolean", "null"], "description": "null means existence could not be established; index absence is not filesystem absence"},
+                        "indexed": {"type": ["boolean", "null"]},
+                        "status": {"type": "string", "enum": ["indexed", "not_indexed", "unreachable", "incomplete"]},
                         "type": {"type": "string", "enum": ["file", "folder", "other"]},
                         "size": {"type": "integer"},
                         "modified": {"type": "string"},
@@ -311,13 +320,14 @@ fn stats_output_schema() -> Value {
             "query": {"type": "string"},
             "effective_query": {"type": "string"},
             "count": {"type": "integer"},
-            "count_accuracy": {"type": "string", "enum": ["exact"],
-                "description": "always exact: Everything reports the true total independently of how many rows are fetched"},
+            "count_accuracy": {"type": "string", "enum": ["exact", "partial"],
+                "description": "partial if any requested index is unreachable"},
+            "count_scope": {"type": "string", "enum": ["all requested indexes", "reachable indexes"]},
             "total_size": {"type": "integer",
                 "description": "absent when no exact sum was requested or the row cap was hit"},
             "total_size_accuracy": {"type": "string", "enum": ["exact", "unavailable"]},
             "total_size_note": {"type": "string",
-                "description": "why the size is unavailable, when it is"},
+                "description": "why size is unavailable, or the live-scan consistency caveat"},
             "rows_summed": {"type": "integer"},
             "sampled": {"type": "integer"},
             "breakdown": {
@@ -327,9 +337,10 @@ fn stats_output_schema() -> Value {
                     "properties": {
                         "extension": {"type": "string"},
                         "count": {"type": "integer"},
-                        "size": {"type": "integer"}
+                        "size": {"type": "integer"},
+                        "size_accuracy": {"type": "string", "enum": ["observed_sum", "unavailable"]}
                     },
-                    "required": ["extension", "count", "size"],
+                    "required": ["extension", "count", "size_accuracy"],
                     "additionalProperties": false
                 }
             },
@@ -346,29 +357,19 @@ fn batch_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "queries_requested": {"type": "integer"},
-            "queries_executed": {"type": "array", "items": {"type": "string"}},
-            "total_returned": {"type": "integer"},
-            "results": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "effective_query": {"type": "string"},
-                        "total": {"type": "integer"},
-                        "returned": {"type": "integer"},
-                        "results": {"type": "array", "items": item_schema()},
-                        "error": {"type": "string"}
-                    },
-                    "additionalProperties": false
-                }
-            },
-            "elapsed_ms": {"type": "number"}
+            "queries_requested": {"type":"integer"},
+            "queries_executed": {"type":"array","items":{"type":"string"}},
+            "queries_skipped": {"type":"integer"},
+            "budget_exhausted": {"type":"boolean"},
+            "total_returned": {"type":"integer"},
+            "results": {"type":"array","items":{"oneOf":[
+                results_output_schema(),
+                schema(json!({"query":{"type":"string"},"error":{"type":"string"}}), &["query","error"])
+            ]}},
+            "elapsed_ms": {"type":"number"}
         },
-        "required": ["queries_requested", "queries_executed", "total_returned",
-                     "results", "elapsed_ms"],
-        "additionalProperties": false
+        "required":["queries_requested","queries_executed","queries_skipped","budget_exhausted","total_returned","results","elapsed_ms"],
+        "additionalProperties":false
     })
 }
 
@@ -443,6 +444,8 @@ struct Group {
     /// The exact total that instance reports. Meaningless when `error` is set.
     total: u64,
     items: Vec<Item>,
+    offset: usize,
+    consumed: usize,
     error: Option<String>,
 }
 
@@ -460,10 +463,19 @@ impl Group {
             Ok(resp) => Self {
                 backend: o.backend,
                 total: resp.total_results,
+                consumed: resp.results.len(),
+                offset: 0,
                 items: resp.results.into_iter().map(Item::from).collect(),
                 error: None,
             },
-            Err(e) => Self { backend: o.backend, total: 0, items: Vec::new(), error: Some(e) },
+            Err(e) => Self {
+                backend: o.backend,
+                total: 0,
+                items: Vec::new(),
+                offset: 0,
+                consumed: 0,
+                error: Some(e),
+            },
         }
     }
 
@@ -472,6 +484,10 @@ impl Group {
             "source": self.backend.name,
             "url": self.backend.url,
             "returned": self.items.len(),
+            "offset": self.offset,
+            "consumed": self.consumed,
+            "next_offset": self.offset.saturating_add(self.consumed),
+            "has_more": if self.error.is_some() { None } else { Some(((self.offset as u64).saturating_add(self.consumed as u64)) < self.total) },
         });
         match &self.error {
             // `total` is omitted rather than sent as 0: an unreachable instance has
@@ -642,7 +658,19 @@ fn is_loopback(cfg: &Config) -> bool {
 
 /// Run one query shape against every instance and collect one group per instance.
 fn gather(backends: &[Backend], q: &Query) -> Vec<Group> {
-    everything::query_all(backends, q).into_iter().map(Group::from_outcome).collect()
+    everything::query_all(backends, q).into_iter().map(|o| {
+        let mut group = Group::from_outcome(o);
+        group.offset = q.offset;
+        if group.error.is_none() {
+            let invalid = if group.consumed==0 && (q.offset as u64)<group.total && q.count>0 {
+                Some("backend returned an empty page before its reported total; retry the query")
+            } else if group.consumed>q.count || (group.consumed>0 && (q.offset as u64).saturating_add(group.consumed as u64)>group.total) {
+                Some("backend page is inconsistent with its requested count/offset and reported total")
+            } else { None };
+            if let Some(error)=invalid {group.error=Some(error.into());group.items.clear();group.consumed=0;}
+        }
+        group
+    }).collect()
 }
 
 /// With one instance there is no partial success to report, so a failure is the tool
@@ -662,17 +690,37 @@ fn fail_if_sole_backend(groups: &[Group]) -> Result<(), String> {
 /// count, so adding them introduces no sampling error. Only reachable instances
 /// contribute - an unreachable one has no count to add.
 fn summed_total(groups: &[Group]) -> u64 {
-    groups.iter().filter(|g| g.error.is_none()).map(|g| g.total).sum()
+    groups
+        .iter()
+        .filter(|g| g.error.is_none())
+        .map(|g| g.total)
+        .sum()
 }
 
-/// How far the next page moves each instance.
-///
-/// Instances page independently and can return different numbers of rows (one may
-/// have fewer matches than the page asks for), so the next offset advances by the
-/// largest of them. Advancing by the sum would skip rows on every instance, and
-/// advancing by a smaller one would re-fetch rows already seen.
-fn page_step(groups: &[Group]) -> usize {
-    groups.iter().map(|g| g.items.len()).max().unwrap_or(0)
+/// A shared cursor exists only when all unfinished backends consumed the same
+/// raw prefix. Otherwise callers must page each source with its own cursor.
+fn next_cursor(groups: &[Group], offset: usize) -> Option<usize> {
+    if groups.iter().any(|g| g.error.is_some()) {
+        return None;
+    }
+    let mut active = groups
+        .iter()
+        .filter(|g| (offset as u64).saturating_add(g.consumed as u64) < g.total);
+    let Some(first) = active.next() else {
+        return Some(offset.saturating_add(groups.iter().map(|g| g.consumed).max().unwrap_or(0)));
+    };
+    if active.all(|g| g.consumed == first.consumed) {
+        Some(offset.saturating_add(first.consumed))
+    } else {
+        None
+    }
+}
+fn total_accuracy(groups: &[Group]) -> &'static str {
+    if groups.iter().any(|g| g.error.is_some()) {
+        "partial"
+    } else {
+        "exact"
+    }
 }
 
 /// Every row handed back, summed over the instances.
@@ -680,10 +728,17 @@ fn total_returned(groups: &[Group]) -> usize {
     groups.iter().map(|g| g.items.len()).sum()
 }
 
-fn any_has_more(groups: &[Group], offset: usize) -> bool {
-    groups
+fn any_has_more(groups: &[Group], offset: usize) -> Option<bool> {
+    if groups
         .iter()
-        .any(|g| g.error.is_none() && (offset as u64 + g.items.len() as u64) < g.total)
+        .any(|g| g.error.is_none() && (offset as u64).saturating_add(g.consumed as u64) < g.total)
+    {
+        Some(true)
+    } else if groups.iter().any(|g| g.error.is_some()) {
+        None
+    } else {
+        Some(false)
+    }
 }
 
 /// Render the answer from one or more instances.
@@ -697,7 +752,11 @@ fn render_groups(groups: &[Group], offset: usize) -> String {
         let g = &groups[0];
         return match &g.error {
             Some(e) => format!("{}: {e}\n", g.name()),
-            None => format_items(&g.items, offset, g.total),
+            None => format!(
+                "source: {}\n{}",
+                g.name(),
+                format_items(&g.items, offset, g.total)
+            ),
         };
     }
 
@@ -727,9 +786,10 @@ fn render_groups(groups: &[Group], offset: usize) -> String {
     let returned: usize = groups.iter().map(|g| g.items.len()).sum();
     out.push_str(&format!(
         "{returned} result(s) from offset {offset} across {reachable} of {} indexes; \
-         {} matching in total (exact).",
+         {} matching in total ({}).",
         groups.len(),
-        summed_total(groups)
+        summed_total(groups),
+        total_accuracy(groups)
     ));
     if reachable < groups.len() {
         out.push_str(&format!(
@@ -774,7 +834,7 @@ impl Handler for Tools {
                 "match_regex": p_bool("Treat query as a regular expression", false),
                 "match_path": p_bool("Match the query against the full path instead of the filename", false),
                 "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),
-                "probe": p_bool("Multi-probe: when a single bare term returns few hits, also look for it in the path and among folders (useful when the thing you are naming is really a directory). Every extra query executed is reported in `probes`.", false),
+                "probe": p_bool("Expand a bare term into one engine-side name/path/folder union before counting, sorting and paging. Applies whenever enabled, not just to thin pages. Existing filters and match flags still apply; branches are reported in probes.", false),
                 "include_total": p_bool("Also report the total match count (it is already exact and costs nothing, so this only controls whether the text form mentions it).", false),
                 "url": p_url(&url_desc()),
             }),
@@ -816,7 +876,7 @@ impl Handler for Tools {
                 "entry_type": p_enum("Restrict to files or folders.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict counting to this directory", Some("")),
                 "include_size": p_bool("Report total size of matching files. Without exact_size the figure is omitted entirely rather than estimated from a biased sample.", true),
-                "exact_size": p_bool("Sum every match to get an exact total size. Costs one paged pass over the result set, so it is opt-in; refused above 200000 matches. Also makes the extension breakdown exact.", false),
+                "exact_size": p_bool("Sum every match to get an exact total size. Costs one paged pass over the result set, so it is opt-in; refused above 200000 matches. The extension breakdown remains limited to the initial sample.", false),
                 "breakdown_by_extension": p_bool("Break the result set down by extension", false),
                 "sample_sort": p_string("Sort used when sampling for the breakdown. Name sorts are rejected when a breakdown is requested, because filename sort correlates with extension and biases the sample.", Some("date-modified-desc")),
                 "url": p_url(&url_desc()),
@@ -848,7 +908,7 @@ impl Handler for Tools {
                              "maxItems": 8,
                              "items": {"type": "object"}
                          }),
-                         "max_total_results": p_int("Stop early once this many results have been returned across all queries.", 200, 1, 2000),
+                         "max_total_results": p_int("Hard maximum number of displayed results across all queries and backends; later queries are skipped when exhausted. Backend overfetch for diversification is separately bounded.", 200, 1, 2000),
                      }),
                      &["queries"],
                  ),
@@ -914,10 +974,6 @@ fn item_json(it: &Item, source: Option<&str>) -> Value {
         "full_path": it.full_path(),
         "type": if it.is_dir { "folder" } else { "file" },
     });
-    // Only when several instances answered. With one, every hit is from it, and
-    // emitting the field anyway would break every client whose cached output schema
-    // predates it: `additionalProperties: false` rejects the entire response, which
-    // is a far worse failure than the ambiguity the field removes.
     if let Some(s) = source {
         o["source"] = json!(s);
     }
@@ -943,22 +999,37 @@ fn item_json(it: &Item, source: Option<&str>) -> Value {
     o
 }
 
-/// Keep at most `n` hits per parent directory, preserving order.
-fn diversify(items: Vec<Item>, n: usize) -> Vec<Item> {
-    if n == 0 {
-        return items;
-    }
-    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut out = Vec::with_capacity(items.len());
+/// Select a displayed page and retain the raw prefix actually consumed. Rows
+/// fetched past the last displayed hit remain eligible for the next page.
+fn select_page(items: Vec<Item>, per_parent: usize, limit: usize) -> (Vec<Item>, usize) {
+    let mut seen = std::collections::HashMap::<String, usize>::new();
+    let mut out = Vec::new();
+    let mut consumed = 0;
     for it in items {
-        let key = it.path.to_lowercase();
-        let c = seen.entry(key).or_insert(0);
-        if *c < n {
-            *c += 1;
+        if out.len() == limit {
+            break;
+        }
+        consumed += 1;
+        let count = seen.entry(it.path.to_lowercase()).or_insert(0);
+        if per_parent == 0 || *count < per_parent {
+            *count += 1;
             out.push(it);
         }
     }
-    out
+    (out, consumed)
+}
+
+fn file_size_sum(items: &[Item]) -> Result<u64, String> {
+    items.iter().try_fold(0u64, |sum, item| {
+        let size = if item.is_dir {
+            0
+        } else {
+            item.size
+                .ok_or_else(|| format!("file size missing or invalid for {}", item.full_path()))?
+        };
+        sum.checked_add(size)
+            .ok_or_else(|| "file size sum exceeds u64".to_string())
+    })
 }
 
 /// Just the rows. A grouped answer needs them under a per-machine header, and the
@@ -1041,7 +1112,7 @@ impl Tools {
         while (offset as u64) < total {
             let page = client.query(&Query {
                 search: effective,
-                count: 500,
+                count: (total - offset as u64).min(500) as usize,
                 offset,
                 sort,
                 ascending: !sort.ends_with("-desc"),
@@ -1051,23 +1122,38 @@ impl Tools {
                 match_path: false,
                 path: None,
             })?;
+            if page.total_results != total {
+                return Err(
+                    "index count changed during the size scan; retry against a stable index".into(),
+                );
+            }
             if page.results.is_empty() {
-                break;
+                return Err(format!(
+                    "incomplete size scan: read {offset} of {total} reported rows"
+                ));
             }
-            for r in &page.results {
-                if let Some(sz) = r.size.as_deref().and_then(|s| s.parse::<u64>().ok()) {
-                    sum += sz;
-                }
+            if page.results.len() as u64 > total.saturating_sub(offset as u64) {
+                return Err("index returned more rows than its reported remaining count".into());
             }
-            offset += page.results.len();
-            if page.results.len() < 500 {
-                break;
-            }
+            let rows: Vec<Item> = page.results.into_iter().map(Item::from).collect();
+            sum = sum
+                .checked_add(file_size_sum(&rows)?)
+                .ok_or_else(|| "file size sum exceeds u64".to_string())?;
+            offset += rows.len();
+            // A short page is not proof of completion; only the reported count is.
         }
         Ok(sum)
     }
 
     fn search(&mut self, args: &Value) -> Result<ToolOutput, String> {
+        self.search_with_budget(args, None)
+    }
+
+    fn search_with_budget(
+        &mut self,
+        args: &Value,
+        budget: Option<usize>,
+    ) -> Result<ToolOutput, String> {
         let started = Instant::now();
         let query = s(args, "query");
         let category = opt(args, "category");
@@ -1081,7 +1167,8 @@ impl Tools {
                 unknown_args_hint(args, SEARCH_ARGS)
             ));
         }
-        let max = cap(self.client.config(), u(args, "max_results", 50));
+        let max =
+            cap(self.client.config(), u(args, "max_results", 50)).min(budget.unwrap_or(usize::MAX));
         let offset = u(args, "offset", 0);
         let sort = s_or(args, "sort", "date-modified-desc");
         everything::validate_sort(&sort)?;
@@ -1119,8 +1206,28 @@ impl Tools {
             match_modes.push("match full path");
         }
 
+        // Expand once, before the engine sorts/counts/pages. Mixing separate
+        // offset-zero probe pages cannot produce an exact union or a valid cursor.
+        let bare_term = !query.trim().is_empty()
+            && !regex
+            && !query
+                .chars()
+                .any(|c| c.is_whitespace() || ":*?|<>!\"\\/".contains(c));
+        let probes = if b(args, "probe", false) && bare_term {
+            vec![
+                format!("path:{}", query.trim()),
+                format!("folder: {}", query.trim()),
+            ]
+        } else {
+            Vec::new()
+        };
+        let expanded = if probes.is_empty() {
+            query.clone()
+        } else {
+            format!("<{} | {} | <{}>>", query.trim(), probes[0], probes[1])
+        };
         let effective = compile(&Filters {
-            raw: &query,
+            raw: &expanded,
             category: category.as_deref(),
             entry_type: &entry_type,
             path: path.as_deref(),
@@ -1130,7 +1237,11 @@ impl Tools {
         let backends = resolve_backends(self.client.config(), args)?;
 
         // Diversification needs a wider net than the page actually returned.
-        let fetch = if max_per_parent > 0 { (max * 5).min(500) } else { max };
+        let fetch = if max_per_parent > 0 {
+            max.saturating_mul(5).min(500)
+        } else {
+            max
+        };
 
         let mut groups = gather(
             &backends,
@@ -1149,72 +1260,32 @@ impl Tools {
         );
         fail_if_sole_backend(&groups)?;
 
-        // Optional multi-probe. A bare term usually names a file, but agents often
-        // mean "the thing called X" when X is really a directory (a project folder).
-        // When a machine's page comes back thin, look for the term in the path and
-        // among folders there too. Opt-in, and every extra query is reported back, so
-        // the widening is never silent.
-        let bare_term = !query.trim().is_empty()
-            && !query.contains(' ')
-            && !query.contains(':')
-            && !query.contains('*')
-            && !query.contains('?')
-            && !regex;
-        let mut probes: Vec<String> = Vec::new();
-        if b(args, "probe", false) && bare_term {
-            for g in groups.iter_mut() {
-                if g.error.is_some() || g.items.len() >= max {
-                    continue;
-                }
-                for variant in [format!("path:{}", query.trim()), format!("folder: {}", query.trim())] {
-                    if let Ok(r2) = Client::new(g.backend.config.clone()).query(&Query {
-                        search: &variant,
-                        count: max,
-                        offset: 0,
-                        sort: &sort,
-                        ascending: !sort.ends_with("-desc"),
-                        case: false,
-                        whole_word: false,
-                        regex: false,
-                        match_path: false,
-                        path: None,
-                    }) {
-                        if !probes.contains(&variant) {
-                            probes.push(variant.clone());
-                        }
-                        for it in r2.results.into_iter().map(Item::from) {
-                            g.items.push(it);
-                        }
-                    }
-                }
-                let mut seen = std::collections::HashSet::new();
-                g.items.retain(|i| seen.insert(i.full_path().to_lowercase()));
-            }
-        }
-
         let diversified = max_per_parent > 0;
+        let mut remaining = budget.unwrap_or(usize::MAX);
         for g in groups.iter_mut() {
             if g.error.is_some() {
                 continue;
             }
-            // A probe can contribute rows the engine's own total does not count.
-            g.total = g.total.max(g.items.len() as u64);
-            g.items = diversify(std::mem::take(&mut g.items), max_per_parent);
-            g.items.truncate(max);
+            let (items, consumed) = select_page(
+                std::mem::take(&mut g.items),
+                max_per_parent,
+                max.min(remaining),
+            );
+            g.items = items;
+            g.consumed = consumed;
+            remaining -= g.items.len();
         }
 
         let total = summed_total(&groups);
         let returned = total_returned(&groups);
-        let step = page_step(&groups);
+        let next = next_cursor(&groups, offset);
         let has_more = any_has_more(&groups, offset);
-        // Several instances is the only case that needs a label or a per-machine
-        // breakdown, and it is the only case a client with an older cached schema
-        // cannot reach - so the single-instance response stays exactly as it was.
+        // Every hit has a source, even when only one backend was selected.
         let multi = groups.len() > 1;
         let results: Vec<Value> = groups
             .iter()
             .flat_map(|g| {
-                let src = if multi { Some(g.name()) } else { None };
+                let src = Some(g.name());
                 g.items.iter().map(move |i| item_json(i, src))
             })
             .collect();
@@ -1222,10 +1293,9 @@ impl Tools {
         // One instance with nothing to show keeps the terse answer it always gave;
         // several always report per machine, because "no results" without saying
         // which machines were asked is the answer that cannot be acted on.
-        let single_empty =
-            groups.len() == 1 && returned == 0 && groups[0].error.is_none();
+        let single_empty = groups.len() == 1 && returned == 0 && groups[0].error.is_none();
         let mut text = if single_empty {
-            "No results.\n".to_string()
+            format!("source: {}\nNo results.\n", groups[0].name())
         } else {
             let mut head = String::new();
             if !query.trim().is_empty() {
@@ -1243,11 +1313,17 @@ impl Tools {
             head
         };
         if include_total && returned == 0 {
-            text.push_str(&format!("Total matches: {total} (exact)\n"));
+            text.push_str(&format!(
+                "Total matches: {total} ({})\n",
+                total_accuracy(&groups)
+            ));
         }
 
         if !probes.is_empty() {
-            text.push_str(&format!("extra probes executed: {}\n", probes.join("  |  ")));
+            text.push_str(&format!(
+                "probe branches included in the engine query: {}\n",
+                probes.join("  |  ")
+            ));
         }
         let mut structured = json!({
             "query": query,
@@ -1255,14 +1331,45 @@ impl Tools {
             "match_modes": match_modes,
             "probes": probes,
             "total": total,
-            "total_accuracy": "exact",
+            "total_accuracy": total_accuracy(&groups),
+            "total_scope": if total_accuracy(&groups)=="exact" {"all requested indexes"} else {"reachable indexes"},
             "returned": returned,
             "offset": offset,
-            "next_offset": offset + step,
+            "next_offset": next,
             "has_more": has_more,
             "results": results,
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
+        if next.is_none() {
+            let note = "No shared cursor: resume each backend separately with its source/url and backends[].next_offset; failed backends retry their original offset.";
+            structured["pagination_note"] = json!(note);
+            text.push_str(&format!("\n{note}\n"));
+        }
+        if multi {
+            for g in &groups {
+                text.push_str(&format!(
+                    "\n{}: offset {}, consumed {}, next_offset {}{}",
+                    g.name(),
+                    g.offset,
+                    g.consumed,
+                    g.offset.saturating_add(g.consumed),
+                    if g.error.is_some() {
+                        " (retry this backend)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        } else {
+            text.push_str(&format!(
+                "\nnext_offset: {}; has_more: {}",
+                next.map(|v| v.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+                has_more
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            ));
+        }
         if multi {
             structured["backends"] = json!(groups.iter().map(Group::json).collect::<Vec<_>>());
             // `offset` then applies to each instance separately, and a caller reading
@@ -1370,7 +1477,7 @@ impl Tools {
         let results: Vec<Value> = groups
             .iter()
             .flat_map(|g| {
-                let src = if multi { Some(g.name()) } else { None };
+                let src = Some(g.name());
                 g.items.iter().map(move |i| item_json(i, src))
             })
             .collect();
@@ -1390,7 +1497,8 @@ impl Tools {
             "effective_period": effective_period,
             "expanded": expanded,
             "total": total,
-            "total_accuracy": "exact",
+            "total_accuracy": total_accuracy(&groups),
+            "total_scope": if total_accuracy(&groups)=="exact" {"all requested indexes"} else {"reachable indexes"},
             "returned": returned,
             "has_more": any_has_more(&groups, 0),
             "results": results,
@@ -1549,7 +1657,7 @@ impl Tools {
                 }
                 Err(err) => {
                     text.push_str(&format!("  error: {err}\n\n"));
-                    entries.push(json!({"path": p, "exists": false, "error": err.to_string()}));
+                    entries.push(json!({"path": p, "exists": if err.kind() == std::io::ErrorKind::NotFound { Some(false) } else { None }, "error": err.to_string()}));
                 }
             }
         }
@@ -1593,12 +1701,13 @@ impl Tools {
             Ok(r) => r,
             Err(e) => {
                 text.push_str(&format!("  error: {e}\n\n"));
-                return json!({"path": path, "exists": false, "source": backend.name, "error": e});
+                return json!({"path": path, "exists": null, "indexed": null, "status": "unreachable", "source": backend.name, "error": e});
             }
         };
 
         // The phrase search can also match the same name elsewhere, so the row is
         // only accepted when its full path is the one that was asked for.
+        let complete = resp.total_results == resp.results.len() as u64;
         let want = path.trim_end_matches(['\\', '/']).to_lowercase();
         let hit = resp.results.into_iter().find(|r| {
             let sep = if r.path.ends_with('\\') { "" } else { "\\" };
@@ -1608,14 +1717,14 @@ impl Tools {
             // Absence from the index is not proof the file is gone: Everything only
             // indexes the NTFS volumes it was pointed at, so a network drive or an
             // excluded folder never appears here however present it is.
-            let msg = format!(
-                "not in the index of {} ({}). Either the path does not exist there, or it \
-                 lives on a volume that machine's Everything does not index - network \
-                 drives and excluded folders never show up in it.",
-                backend.name, backend.url
-            );
+            let msg = if complete {
+                format!("not in the index of {} ({}); this does not establish filesystem absence. Excluded folders and unindexed volumes may still contain the path.", backend.name, backend.url)
+            } else {
+                format!("path not observed in the limited response from {}; the full index result was not returned, so index membership and filesystem existence remain unknown.", backend.name)
+            };
             text.push_str(&format!("  {msg}\n\n"));
-            return json!({"path": path, "exists": false, "source": backend.name, "error": msg});
+            return json!({"path":path,"exists":null,"indexed":if complete {Some(false)} else {None},
+                "status":if complete {"not_indexed"} else {"incomplete"},"source":backend.name,"error":msg});
         };
 
         let item = Item::from(hit);
@@ -1628,6 +1737,8 @@ impl Tools {
         let mut e = json!({
             "path": path,
             "exists": true,
+            "indexed": true,
+            "status": "indexed",
             "source": backend.name,
             "source_url": backend.url,
             "resolved_from": "index",
@@ -1740,7 +1851,8 @@ impl Tools {
             "query": query,
             "effective_query": effective,
             "count": total,
-            "count_accuracy": "exact",
+            "count_accuracy": total_accuracy(&groups),
+            "count_scope": if total_accuracy(&groups)=="exact" {"all requested indexes"} else {"reachable indexes"},
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
         if multi {
@@ -1748,7 +1860,7 @@ impl Tools {
         }
         let mut text = if multi {
             let mut t = format!(
-                "count: {total} (exact - the sum of {reachable} of {} indexes)\n\
+                "count: {total} (sum of {reachable} of {} reachable indexes)\n\
                  effective query: {effective}\n\n",
                 groups.len()
             );
@@ -1775,32 +1887,63 @@ impl Tools {
             // makes the whole figure unavailable rather than partially guessed - a
             // number covering two machines out of three reads as a total.
             let mut sum = 0u64;
-            let mut exact = true;
+            let mut exact = reachable == groups.len();
             // Whether any instance actually had to be paged through. The sample
             // covering every match already yields an exact sum, and saying "summed all
             // N matches" there would claim work that never happened.
             let mut summed_all = false;
-            let mut note: Option<String> = None;
+            let mut note: Option<String> = if exact {
+                None
+            } else {
+                Some(
+                    "one or more indexes could not be reached; no complete total size is available"
+                        .into(),
+                )
+            };
             let mut sampled_rows = 0usize;
             for g in &groups {
                 if g.error.is_some() {
                     continue;
                 }
-                let known: Vec<u64> = g.items.iter().filter_map(|i| i.size).collect();
-                let partial: u64 = known.iter().sum();
-                if known.len() as u64 >= g.total {
-                    sum += partial;
+                let partial = match file_size_sum(&g.items) {
+                    Ok(value) => value,
+                    Err(why) => {
+                        exact = false;
+                        note = Some(format!("{}: {why}", g.name()));
+                        break;
+                    }
+                };
+                if g.items.len() as u64 > g.total {
+                    exact = false;
+                    note = Some("index returned more rows than its reported count".into());
+                    break;
+                } else if g.items.len() as u64 == g.total {
+                    match sum.checked_add(partial) {
+                        Some(value) => sum = value,
+                        None => {
+                            exact = false;
+                            note = Some("file size sum exceeds u64".into());
+                            break;
+                        }
+                    }
                 } else if want_exact {
                     match self.sum_all_sizes(
                         &g.backend,
                         &effective,
                         &sample_sort,
-                        known.len(),
+                        g.items.len(),
                         partial,
                         g.total,
                     ) {
-                        Ok(s) => {
-                            sum += s;
+                        Ok(value) => {
+                            match sum.checked_add(value) {
+                                Some(value) => sum = value,
+                                None => {
+                                    exact = false;
+                                    note = Some("file size sum exceeds u64".into());
+                                    break;
+                                }
+                            }
                             summed_all = true;
                         }
                         Err(why) => {
@@ -1810,7 +1953,7 @@ impl Tools {
                         }
                     }
                 } else {
-                    sampled_rows += known.len();
+                    sampled_rows += g.items.len();
                     exact = false;
                 }
             }
@@ -1820,6 +1963,8 @@ impl Tools {
                 structured["total_size_accuracy"] = json!("exact");
                 if summed_all {
                     structured["rows_summed"] = json!(total);
+                    structured["total_size_note"] = json!("Complete sum of the observed live scan, not an atomic snapshot; concurrent changes can affect rows even when the count stays unchanged.");
+                    text.push_str("Size scan is not an atomic snapshot; concurrent index changes can affect the sum.\n");
                     text.push_str(&format!(
                         "total size: {} ({} bytes, exact - summed all {total} matches)\n",
                         everything::human_size(sum),
@@ -1854,7 +1999,7 @@ impl Tools {
 
         if breakdown {
             use std::collections::BTreeMap;
-            let mut by_ext: BTreeMap<String, (usize, u64)> = BTreeMap::new();
+            let mut by_ext: BTreeMap<String, (usize, Option<u64>)> = BTreeMap::new();
             let mut sampled = 0usize;
             for g in &groups {
                 if g.error.is_some() {
@@ -1866,16 +2011,26 @@ impl Tools {
                         .extension()
                         .map(|e| e.to_string_lossy().to_lowercase())
                         .unwrap_or_else(|| "(none)".into());
-                    let e = by_ext.entry(ext).or_insert((0, 0));
+                    let e = by_ext.entry(ext).or_insert((0, Some(0)));
                     e.0 += 1;
-                    e.1 += it.size.unwrap_or(0);
+                    e.1 = e.1.and_then(|sum| {
+                        if it.is_dir {
+                            Some(sum)
+                        } else {
+                            it.size.and_then(|sz| sum.checked_add(sz))
+                        }
+                    });
                 }
             }
             let list: Vec<Value> = by_ext
                 .iter()
-                .map(|(ext, (n, sz))| json!({"extension": ext, "count": n, "size": sz}))
+                .map(|(ext, (n, sz))| {
+                    let mut row=json!({"extension":ext,"count":n,"size_accuracy":if sz.is_some(){"observed_sum"}else{"unavailable"}});
+                    if let Some(size)=sz {row["size"]=json!(size);}
+                    row
+                })
                 .collect();
-            let covers_all = sampled as u64 >= total;
+            let covers_all = reachable == groups.len() && sampled as u64 == total;
             let accuracy = if covers_all { "exact" } else { "sampled" };
             text.push_str(&format!(
                 "breakdown ({accuracy}, from {} of {} matches):\n",
@@ -1890,7 +2045,8 @@ impl Tools {
             for (ext, (n, sz)) in by_ext.iter().take(40) {
                 text.push_str(&format!(
                     "  {ext:<12} {n:>9}  {}\n",
-                    everything::human_size(*sz)
+                    sz.map(everything::human_size)
+                        .unwrap_or_else(|| "unavailable".into())
                 ));
             }
             if !covers_all {
@@ -1904,6 +2060,7 @@ impl Tools {
             structured["sampled"] = json!(sampled);
         }
 
+        structured["elapsed_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
         Ok(ToolOutput::new(text, structured))
     }
 
@@ -1933,7 +2090,7 @@ impl Tools {
         let mut total_returned = 0usize;
 
         for (i, q) in queries.iter().enumerate() {
-            match self.search(q) {
+            match self.search_with_budget(q, Some(max_total - total_returned)) {
                 Ok(out) => {
                     let sc = out.structured;
                     let n = sc["returned"].as_u64().unwrap_or(0) as usize;
@@ -1948,13 +2105,7 @@ impl Tools {
                     ));
                     text.push_str(&out.text);
                     text.push('\n');
-                    per_query.push(json!({
-                        "query": sc["query"],
-                        "effective_query": sc["effective_query"],
-                        "total": sc["total"],
-                        "returned": sc["returned"],
-                        "results": sc["results"],
-                    }));
+                    per_query.push(sc);
                 }
                 Err(e) => {
                     text.push_str(&format!("===== query {} : error: {e}\n", i + 1));
@@ -1972,6 +2123,8 @@ impl Tools {
 
         let structured = json!({
             "queries_requested": queries.len(),
+            "queries_skipped": queries.len() - per_query.len(),
+            "budget_exhausted": total_returned >= max_total,
             "queries_executed": executed,
             "total_returned": total_returned,
             "results": per_query,
@@ -2056,6 +2209,11 @@ mod tests {
         // default names this machine, so switching `local` off must not silence it.
         let b = resolve_single_backend(&base, &json!({})).expect("the default resolves");
         assert_eq!(b.name, servers::LOCAL);
-        assert_eq!(b.config.address(), "127.0.0.1:23999", "a registered local address wins");
+        assert_eq!(
+            b.config.address(),
+            "127.0.0.1:23999",
+            "a registered local address wins"
+        );
     }
+    include!("tools/regression_tests.rs");
 }

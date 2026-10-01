@@ -15,8 +15,7 @@
 //! `crate::servers` for the registry of remote instances.
 
 use serde::Deserialize;
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
+mod http;
 use std::time::Duration;
 
 // ---------------------------------------------------------------- constants
@@ -183,7 +182,7 @@ where
 
 #[derive(Debug, Deserialize)]
 pub struct RawResponse {
-    #[serde(rename = "totalResults", default)]
+    #[serde(rename = "totalResults")]
     pub total_results: u64,
     #[serde(default)]
     pub results: Vec<RawResult>,
@@ -423,7 +422,7 @@ impl Config {
         let timeout_ms = std::env::var("EVERYTHING_TIMEOUT")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .map(|s| s * 1000)
+            .map(|s| s.saturating_mul(1000))
             .unwrap_or(30_000);
         let cap = std::env::var("EVERYTHING_MAX_RESULTS_CAP")
             .ok()
@@ -448,7 +447,11 @@ impl Config {
     }
 
     pub fn address(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
     }
 }
 
@@ -693,82 +696,7 @@ impl Client {
     }
 
     fn get(&self, path_and_query: &str) -> Result<String, String> {
-        let addr = self.cfg.address();
-        let mut stream = TcpStream::connect(&addr).map_err(|e| {
-            // Two different situations, two different fixes. The local hint is the
-            // one that answers "it does not work" on a fresh machine; the remote one
-            // is about reachability, which the local hint would misdirect.
-            if matches!(self.cfg.host.as_str(), "127.0.0.1" | "localhost" | "::1") {
-                format!(
-                    "cannot reach Everything's HTTP server at http://{addr} ({e}).\n\
-                     Enable it in Everything: Tools > Options > HTTP Server, and restrict it to \
-                     localhost by setting bindings=127.0.0.1 in Everything's Plugins.ini."
-                )
-            } else {
-                format!(
-                    "cannot reach the Everything HTTP server at http://{addr} ({e}).\n\
-                     Check that the machine is up, that Everything is running on it, and that \
-                     its HTTP server is enabled (Tools > Options > HTTP Server) on a binding \
-                     that covers this network."
-                )
-            }
-        })?;
-        stream.set_read_timeout(Some(self.cfg.timeout)).ok();
-        stream.set_write_timeout(Some(self.cfg.timeout)).ok();
-        let mut req = format!(
-            "GET {path_and_query} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n",
-            self.cfg.host
-        );
-        if let Some((user, pass)) = &self.cfg.auth {
-            req.push_str(&format!(
-                "Authorization: Basic {}\r\n",
-                base64(&format!("{user}:{pass}"))
-            ));
-        }
-        req.push_str("\r\n");
-        stream.write_all(req.as_bytes()).map_err(|e| format!("write failed: {e}"))?;
-
-        let mut reader = BufReader::new(stream);
-        let mut status = String::new();
-        reader.read_line(&mut status).map_err(|e| format!("read failed: {e}"))?;
-        if !status.contains(" 200") {
-            let line = status.trim();
-            // A refusal is not a broken query: say which one it is, or the caller
-            // spends the next hour rewriting a search that was never the problem.
-            if line.contains(" 401") || line.contains(" 403") {
-                return Err(format!(
-                    "the Everything HTTP server at http://{addr} refused the request ({line}). \
-                     It requires credentials - put them in the address as \
-                     http://user:password@host:port."
-                ));
-            }
-            return Err(format!("Everything HTTP server returned: {line}"));
-        }
-        let mut content_length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).map_err(|e| format!("read failed: {e}"))?;
-            let t = line.trim_end();
-            if t.is_empty() {
-                break;
-            }
-            if let Some(v) = t.to_ascii_lowercase().strip_prefix("content-length:") {
-                content_length = v.trim().parse().ok();
-            }
-        }
-        let mut body = String::new();
-        if let Some(n) = content_length {
-            use std::io::Read;
-            let mut buf = vec![0u8; n];
-            reader.read_exact(&mut buf).map_err(|e| format!("read failed: {e}"))?;
-            body.push_str(&String::from_utf8_lossy(&buf));
-        } else {
-            use std::io::Read;
-            let mut s = String::new();
-            reader.read_to_string(&mut s).map_err(|e| format!("read failed: {e}"))?;
-            body = s;
-        }
-        Ok(body)
+        http::get(&self.cfg, path_and_query)
     }
 }
 

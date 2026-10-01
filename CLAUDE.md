@@ -9,7 +9,8 @@ tools that answer file-search questions from Everything's live NTFS index.
 src/
   main.rs       process entry: no args -> MCP stdio server, subcommand -> CLI
   jsonrpc.rs    MCP stdio protocol, tool schemas, the params compat shim
-  everything.rs HTTP transport, addresses, query constants, FILETIME and timezone
+  everything.rs addresses, query constants, FILETIME and timezone
+  everything/http.rs bounded HTTP transport, framing and deadlines
   servers.rs    the instance registry: named Everything servers and their switches
   filetype.rs   name-level type classification and 16 KB header sniffing
   tools.rs      the five tools: validation, query building, result formatting
@@ -36,7 +37,7 @@ cargo test                 # unit tests: classification, time, addresses, regist
 `TEST_SCRIPTS\compare-single-backend.ps1 -BaselineExe <exe>` replays a batch of CLI
 calls against the current build and one compiled from a git worktree, comparing text
 byte for byte and JSON field for field. Run it after any change to the query path:
-"searching one machine is unchanged" is otherwise an assertion, and the multi-instance
+intentional contract changes must be reviewed explicitly, and the multi-instance
 code paths are exactly the kind that quietly alter the single-instance answer.
 
 ## Invariants
@@ -57,7 +58,9 @@ notice.
 - **`date_modified` is a raw FILETIME in UTC.** It is converted to local time
   before it is shown; Everything's own UI and Explorer both show local time, and
   `modified` is the field a "what changed recently" answer rests on.
-- **`count`/`total` are exact; sizes are not.** Everything reports the true total
+- **Backend counts are exact for each response; partial aggregates say so.** If
+  any requested backend fails, total/count accuracy is partial and scope is only
+  reachable indexes. Everything reports the true total
   regardless of the page size. It reports no aggregate at all, so `total_size`
   is omitted unless `exact_size: true` asks for a real sum — extrapolating from a
   top-N slice produced self-contradictory numbers, and a wrong number is worse
@@ -87,7 +90,9 @@ notice.
   merged.** A path from another computer is textually indistinguishable from a
   local one, so an unlabelled merged list turns a remote hit into a file the
   caller tries to open here.
-- **`offset` is per instance; `total` is the sum of exact per-instance counts.**
+- **`offset` is per instance and advances by raw consumed rows.** Different
+  per-backend cursors require separate url-scoped follow-up calls; the shared
+  next_offset is null in that case. `total` sums only reachable counts.
   Paging a merged list with one cursor repeats or skips rows. Both facts are stated
   in the response (`offset_scope`, `backends[]`) rather than left to be inferred.
 - **A failure is an error only when there is one instance.** With one there is no
@@ -103,7 +108,10 @@ notice.
 - The crate has exactly one `unsafe`: `GetTimeZoneInformation` in
   `everything.rs`. That is deliberate — a whole date/time dependency for one
   integer is not worth it, and the registry is not reachable without one either.
-- Everything returns no `Content-Length`, so responses are read to EOF.
+- Everything may return no `Content-Length`, so EOF framing remains supported.
+  The reader also handles bounded Content-Length and chunked responses; one deadline
+  covers DNS, connect and all reads/writes, not just each idle socket operation.
+  Stdio dispatch remains synchronous; no cancellation or whole-tool deadline is promised.
 - Error text should say what to do, not just what failed. The connection error
   names the Everything option to check, because "it does not work" is the most
   common report.
@@ -122,3 +130,13 @@ notice.
 
 `main` is the native implementation. The original Python server is frozen on the
 `legacy` branch and is not a supported fallback; it is kept for reference only.
+
+## Isolated regression tests
+
+`cargo test --locked` includes actual loopback HTTP fixtures for raw-row cursors,
+probe unions, missing sizes, incomplete scans, source labels, remote index
+uncertainty, batch budgets and transport framing/deadlines.
+`TEST_SCRIPTS/mock-http-smoke.py --binary <path>` runs the compiled CLI and MCP
+front ends against one synthetic index. `--validate-schema` requires Python
+jsonschema and checks returned objects against tools/list schemas.
+The five-tool architecture and shared CLI implementation remain unchanged.

@@ -51,6 +51,18 @@ Clear-Target $skillExe
 Copy-Item $src $skillExe -Force
 Write-Host "skill   $skillExe"
 
+# Keep the skill copy of SKILL.md in step with the repo. Without this the
+# deployed doc silently drifts from the semantics the binary implements.
+$skillMdSrc = Join-Path $root "skills\everything-search\SKILL.md"
+if (Test-Path $skillMdSrc) {
+    $mdDst = Join-Path $SkillDir "SKILL.md"
+    if ((Test-Path $mdDst) -and ((Get-Content $mdDst -Raw) -ne (Get-Content $skillMdSrc -Raw))) {
+        Write-Host "warn    $mdDst differed from the repo copy; overwriting it (git has the history)"
+    }
+    Copy-Item $skillMdSrc $mdDst -Force
+    Write-Host "skill   $mdDst"
+}
+
 if (Test-Path $BinDir) {
     foreach ($name in 'everything-search-mcp.exe', 'everything-mcp.exe') {
         $dst = Join-Path $BinDir $name

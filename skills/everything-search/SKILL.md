@@ -5,6 +5,11 @@ description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫�
 
 # everything-search MCP 使用指南
 
+> **没有 MCP 工具的环境（例如 pi 这类只有 read/write/edit/bash 的 harness）**：
+> 不要调用下面的 `everything-search-mcp.exe`——它是 MCP server，不接受命令行搜索参数，
+> 照 MCP 示例当命令跑会连续失败。改用 Everything 自带的命令行 `es.exe`，
+> 见本文末尾「无 MCP 时的用法（pi 等纯 CLI harness）」一节。
+
 调用 Windows 上基于 voidtools Everything 实时 NTFS 索引的 `everything_*` MCP 工具。
 **单次查询约 1 毫秒**，所以任何"按文件名/扩展名/大小/日期找东西"的场景都应该优先用它，
 而不是 `dir /s`、`Get-ChildItem -Recurse` 或 glob。
@@ -407,3 +412,29 @@ wholeword:read                # 全词匹配
   未索引或连接失败时exists为null，另外看indexed/status；不能据此断言文件不存在。
   清掉幽灵：在那个路径上做一次干净的"创建 + 删除"即可（新 inode、无其它链接）。
 - **NTFS 之外**：exFAT/FAT/网络盘没有 MFT，Everything 只能慢速扫描，结果可能不全。
+
+## 无 MCP 时的用法（pi 等纯 CLI harness）
+
+这类 harness 没有 MCP 工具，但有 bash。改用 Everything 命令行 `es.exe`：
+
+```bash
+ES="/c/Users/AlwaysTS/AppData/Local/Everything/es.exe"
+"$ES" -path "D:\proj" "ext:py;md"                                # 秒级列候选
+"$ES" -path "D:\llm" "ext:gguf" -sort size-descending | head -5  # 按大小取 Top-N
+"$ES" -path "D:\llm" "size:>10gb"                                # 按大小过滤
+"$ES" -path "D:\llm" "dm:today"                                  # 今天修改过
+```
+
+**两个实测坑（2026-09-28）**：
+
+1. **`-sort` 不要和 `-n` 同用**：`-n` 在排序之前就截断，会漏掉真正最大的文件
+   （实测漏掉了 28.5 GB 的最大模型，只返回 27.2/20.2/14 GB）。排序后只用管道截断：
+   `... -sort size-descending | head -N`。
+2. 扩展名过滤用 Everything 搜索语法 `ext:gguf`，**没有 `-ext` 参数**
+   （`-ext gguf` 会被忽略，结果里混进 .cpp/.py 等无关文件）。
+
+完整性说明：Everything 依赖索引，若怀疑索引滞后（刚创建/移动的大文件），
+用 `find` 或 `Get-ChildItem -Recurse` 做一次实时校验。
+
+**取 Top-N 的可靠两步法**：先用 `es.exe` 快速列候选（毫秒级），
+再用 `stat`/`ls -l` 核实大小并排序，可完全避开上面的排序坑。

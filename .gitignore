@@ -17,3 +17,7 @@ __pycache__/
 # Local design-discussion transcripts. Working notes, not deliverables: they quote
 # real host addresses and machine paths verbatim.
 docs/gpt_qa/
+
+# Deployed binary + its lock-litter live in the skill dir (managed by deploy.ps1,
+# reachable via junctions from ~\.agents\skills and D:\AI\AgentsSkills)
+skills/everything-search/bin/

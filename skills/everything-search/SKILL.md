@@ -206,11 +206,11 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 | **`category`** | 十选一：`code` `document` `image` `video` `audio` `archive` `executable` `font` `3d` `data`。**优先用它**，不要自己手拼扩展名列表 |
 | **`entry_type`** | `any`（默认）/ `file` / `folder`。**找工程目录、安装目录时必须用 `folder`**，不要靠结果猜类型 |
 | `path` | 限定目录树。比在 query 里写 `path:` 更可靠 |
-| `max_results` | 1–500，默认 50 |
+| `max_results` | 1–500，**默认 20** |
 | `offset` | 分页 |
 | `sort` | 14 种，见下表；默认 `date-modified-desc` |
 | `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符。**生效情况看回传的 `match_modes`**，别只看 `effective_query` |
-| **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 50 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
+| **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 20 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
 | `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
 | **`url`** | 搜哪台机器：名字、地址、或数组（多台一起搜）。**替换默认集合**，详见「搜别的机器」 |
 
@@ -372,14 +372,32 @@ wholeword:read                # 全词匹配
 
 ## 最佳实践
 
-1. **先粗后细**：先用简单 `query`，结果太多再加 `path` / `category` / `ext:`。
+1. **先看 `total`，再决定要不要翻页。** 每条结果尾部都有
+   `20 result(s) from offset 0 of 353178 matching (exact total).` ——
+   `353178 / 20 = 17659`，这说明查询太宽，**该收窄，不该翻页**。
+   翻 50 页才看完 1000 条，等于把 token 倒进一个没底的桶。
+
+   **收窄手段按效果排：**
+
+   | 手段 | 例子 | 效果 |
+   |---|---|---|
+   | `path` 参数 / `path:` | `path:D:\MyProjects` | **数量级** |
+   | `category` / `ext:` | `ext:py;js` | **数量级** |
+   | `!` 排除 | `!node_modules !__pycache__` | 显著 |
+   | `parent:` | `parent:D:\src`（只搜下一层） | 显著 |
+   | `exact:` / `wholeword:` / `case:` | 提高单条命中的精度 | 中 |
+
+   一次 5 条的精准查询远比一次 20 条的宽泛查询有用 —— 宽泛查询之后几乎总要再搜一次。
 2. **找目录用 `entry_type: "folder"`**，不要从文件结果里猜哪个是工程根目录。
 3. **类型搜索用 `category`**，不要手动拼扩展名列表。
 4. **最近改动用 `everything_find_recent`**，不要手写 `dm:`。
 5. **可能命中上千条时先用 `everything_count_stats` 探规模**，再决定要不要列表。
+   `count` 是精确值，`0` 就是确定的"没有"。
 6. **结果不合预期先读 `effective_query`**。
 7. **要预览文件内容**：先 `everything_search` 拿路径，再 `everything_file_details`；
    或者直接用 agent 自己的 read 工具（本 MCP 不重复提供文件读取能力）。
+8. **默认只返回 20 条**。要更多就显式传 `max_results`，或者跟着 `next_offset` 翻页 ——
+   但先问一句：真的需要第 30 条吗，还是该换一个更准的查询？
 
 ## 陷阱与排错
 

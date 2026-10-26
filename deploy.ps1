@@ -24,10 +24,18 @@ $src = Join-Path $root 'target\release\everything-search-mcp.exe'
 # so the name is freed by moving the old binary aside instead.
 function Clear-Target([string]$Path) {
     if (-not (Test-Path $Path)) { return }
-    $old = "$Path.old"
-    Remove-Item $old -Force -ErrorAction SilentlyContinue
-    try { Move-Item $Path $old -Force -ErrorAction Stop }
-    catch { Remove-Item $Path -Force }
+    # The aside name must be unique per deploy. A fixed `.old` collides with the
+    # previous deploy's aside copy, which a running server may still have mapped -
+    # and a mapped file can be neither overwritten nor deleted, so the rename fails
+    # and the whole deploy stops. The sweep at the end collects them once free.
+    $old = "$Path.old-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    try {
+        Move-Item $Path $old -Force -ErrorAction Stop
+    } catch {
+        # If the name truly cannot be freed, say so instead of carrying on and
+        # copying over a file that is still executing.
+        throw "cannot replace $Path - it is in use and could not be renamed aside: $($_.Exception.Message)"
+    }
 }
 
 if (-not $NoBuild) {
@@ -107,7 +115,7 @@ if (Test-Path $BinDir) {
 # the next deploy after a restart.
 $blocked = @()
 foreach ($dir in @((Split-Path $skillExe), $BinDir)) {
-    foreach ($f in (Get-ChildItem "$dir\everything*.exe.old" -Force -ErrorAction SilentlyContinue)) {
+    foreach ($f in (Get-ChildItem "$dir\everything*.exe.old*" -Force -ErrorAction SilentlyContinue)) {
         try {
             Remove-Item $f.FullName -Force -ErrorAction Stop
             # Unlinking one of several names for the same file leaves Everything's

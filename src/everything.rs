@@ -208,11 +208,27 @@ impl Item {
     }
 }
 
-impl From<RawResult> for Item {
-    fn from(r: RawResult) -> Self {
+impl Item {
+    /// Convert one Everything row.
+    ///
+    /// `tz_minutes` is the local UTC offset, and it is a parameter rather than
+    /// something fetched in here: the conversion used to call
+    /// `GetTimeZoneInformation` for every row, so a 500-row page paid 500 Win32
+    /// syscalls - the whole cost of this function was the offset lookup, not the
+    /// date arithmetic. Callers read it once per response. That is also the more
+    /// consistent choice: every row in one answer is stamped with the offset of a
+    /// single instant instead of one fetched microseconds apart.
+    ///
+    /// There is deliberately no `From<RawResult>` impl: it would have to do the
+    /// per-row lookup again, and an obvious-looking `Item::from` would quietly
+    /// undo this.
+    pub fn from_raw(r: RawResult, tz_minutes: i64) -> Self {
         Item {
             size: r.size.and_then(|s| s.parse::<u64>().ok()),
-            modified: r.date_modified.as_deref().and_then(format_filetime),
+            modified: r
+                .date_modified
+                .as_deref()
+                .and_then(|raw| format_filetime(raw, tz_minutes)),
             is_dir: r.kind == "folder",
             name: r.name,
             path: r.path,
@@ -225,10 +241,13 @@ impl From<RawResult> for Item {
 /// so the value is shifted into local time here; reported raw it was 8 hours off
 /// on a UTC+8 machine, which is exactly the kind of error a "what changed
 /// recently" answer must not have.
-pub fn format_filetime(raw: &str) -> Option<String> {
+///
+/// The offset is passed in (see `Item::from_raw`); the date arithmetic below is
+/// integer-only and was never the expensive part.
+pub fn format_filetime(raw: &str, tz_minutes: i64) -> Option<String> {
     let ticks: u64 = raw.parse().ok()?;
     let unix = (ticks / 10_000_000) as i64 - 11_644_473_600;
-    Some(format_unix(unix + local_offset_minutes() * 60))
+    Some(format_unix(unix + tz_minutes * 60))
 }
 
 /// Unix seconds to `YYYY-MM-DD HH:MM:SS`, with no timezone applied.
@@ -728,12 +747,28 @@ mod tests {
     #[test]
     fn filetime_is_converted_to_local_not_left_in_utc() {
         // 2026-09-12T08:40:37Z as a FILETIME
-        let got = format_filetime("134336760370000000").expect("parses");
-        let local = format_unix(1_789_202_437 + local_offset_minutes() * 60);
+        let tz = local_offset_minutes();
+        let got = format_filetime("134336760370000000", tz).expect("parses");
+        let local = format_unix(1_789_202_437 + tz * 60);
         assert_eq!(got, local);
         // The regression this guards: a raw UTC render was exactly the offset off.
-        if local_offset_minutes() != 0 {
+        if tz != 0 {
             assert_ne!(got, "2026-09-12 08:40:37");
+        }
+    }
+
+    #[test]
+    fn a_hoisted_offset_formats_rows_exactly_as_a_per_row_lookup_would() {
+        // Every caller now reads the offset once per response and passes it down.
+        // If that changed any rendering, this catches it: the hoisted value and a
+        // freshly read one are the same offset, so every row must agree.
+        let tz = local_offset_minutes();
+        for raw in ["134336760370000000", "116444736000000000", "133000000000000000"] {
+            assert_eq!(
+                format_filetime(raw, tz),
+                format_filetime(raw, local_offset_minutes()),
+                "row {raw} rendered differently depending on where the offset came from"
+            );
         }
     }
 

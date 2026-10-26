@@ -460,14 +460,22 @@ impl Group {
 
     fn from_outcome(o: everything::BackendOutcome) -> Self {
         match o.result {
-            Ok(resp) => Self {
-                backend: o.backend,
-                total: resp.total_results,
-                consumed: resp.results.len(),
-                offset: 0,
-                items: resp.results.into_iter().map(Item::from).collect(),
-                error: None,
-            },
+            Ok(resp) => {
+                // One offset for the whole response, not one per row.
+                let tz = everything::local_offset_minutes();
+                Self {
+                    backend: o.backend,
+                    total: resp.total_results,
+                    consumed: resp.results.len(),
+                    offset: 0,
+                    items: resp
+                        .results
+                        .into_iter()
+                        .map(|r| Item::from_raw(r, tz))
+                        .collect(),
+                    error: None,
+                }
+            }
             Err(e) => Self {
                 backend: o.backend,
                 total: 0,
@@ -1002,6 +1010,16 @@ fn item_json(it: &Item, source: Option<&str>) -> Value {
 /// Select a displayed page and retain the raw prefix actually consumed. Rows
 /// fetched past the last displayed hit remain eligible for the next page.
 fn select_page(items: Vec<Item>, per_parent: usize, limit: usize) -> (Vec<Item>, usize) {
+    // With no per-directory cap every row is kept, so the visited map would be
+    // written and never read - while lowercasing each path allocates a String per
+    // result. That is the default (`max_per_parent` is 0), so take the short path
+    // and leave the map out of it entirely.
+    if per_parent == 0 {
+        let mut out = items;
+        let consumed = out.len().min(limit);
+        out.truncate(consumed);
+        return (out, consumed);
+    }
     let mut seen = std::collections::HashMap::<String, usize>::new();
     let mut out = Vec::new();
     let mut consumed = 0;
@@ -1011,7 +1029,7 @@ fn select_page(items: Vec<Item>, per_parent: usize, limit: usize) -> (Vec<Item>,
         }
         consumed += 1;
         let count = seen.entry(it.path.to_lowercase()).or_insert(0);
-        if per_parent == 0 || *count < per_parent {
+        if *count < per_parent {
             *count += 1;
             out.push(it);
         }
@@ -1107,6 +1125,9 @@ impl Tools {
             ));
         }
         let client = Client::new(backend.config.clone());
+        // The exact-size pass can read 200k rows; take the offset once here rather
+        // than once per row.
+        let tz = everything::local_offset_minutes();
         let mut sum = running;
         let mut offset = already_have;
         while (offset as u64) < total {
@@ -1135,7 +1156,11 @@ impl Tools {
             if page.results.len() as u64 > total.saturating_sub(offset as u64) {
                 return Err("index returned more rows than its reported remaining count".into());
             }
-            let rows: Vec<Item> = page.results.into_iter().map(Item::from).collect();
+            let rows: Vec<Item> = page
+                .results
+                .into_iter()
+                .map(|r| Item::from_raw(r, tz))
+                .collect();
             sum = sum
                 .checked_add(file_size_sum(&rows)?)
                 .ok_or_else(|| "file size sum exceeds u64".to_string())?;
@@ -1727,7 +1752,7 @@ impl Tools {
                 "status":if complete {"not_indexed"} else {"incomplete"},"source":backend.name,"error":msg});
         };
 
-        let item = Item::from(hit);
+        let item = Item::from_raw(hit, everything::local_offset_minutes());
         let name = Path::new(&item.name)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())

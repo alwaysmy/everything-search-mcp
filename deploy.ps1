@@ -53,14 +53,33 @@ Write-Host "skill   $skillExe"
 
 # Keep the skill copy of SKILL.md in step with the repo. Without this the
 # deployed doc silently drifts from the semantics the binary implements.
+#
+# The skill directory can be a junction into this repo, in which case the source
+# and destination are literally the same file and Copy-Item refuses to overwrite
+# an item with itself. Comparing content first covers both that case and the
+# ordinary already-in-step one, since an identical hash means there is nothing to
+# copy either way.
 $skillMdSrc = Join-Path $root "skills\everything-search\SKILL.md"
 if (Test-Path $skillMdSrc) {
     $mdDst = Join-Path $SkillDir "SKILL.md"
-    if ((Test-Path $mdDst) -and ((Get-Content $mdDst -Raw) -ne (Get-Content $skillMdSrc -Raw))) {
-        Write-Host "warn    $mdDst differed from the repo copy; overwriting it (git has the history)"
+    $inStep = $false
+    if (Test-Path $mdDst) {
+        try {
+            $inStep = (Get-FileHash $mdDst -Algorithm SHA256).Hash -eq
+                      (Get-FileHash $skillMdSrc -Algorithm SHA256).Hash
+        } catch {
+            $inStep = $false
+        }
     }
-    Copy-Item $skillMdSrc $mdDst -Force
-    Write-Host "skill   $mdDst"
+    if ($inStep) {
+        Write-Host "skill   $mdDst (already in step)"
+    } else {
+        if (Test-Path $mdDst) {
+            Write-Host "warn    $mdDst differed from the repo copy; overwriting it (git has the history)"
+        }
+        Copy-Item $skillMdSrc $mdDst -Force
+        Write-Host "skill   $mdDst"
+    }
 }
 
 if (Test-Path $BinDir) {

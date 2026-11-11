@@ -1,0 +1,5 @@
+# Everything loads this crate's cdylib into its own process. Link the CRT
+# statically so the plugin depends on nothing but Windows system DLLs — no
+# VCRUNTIME140 / UCRT DLL version to mismatch against the host's own copy.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

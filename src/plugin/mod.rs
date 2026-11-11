@@ -120,6 +120,7 @@ pub fn stop_endpoint() {
 pub unsafe extern "system" fn everything_plugin_proc(msg: u32, data: *mut c_void) -> *mut c_void {
     match msg {
         PM_INIT => {
+            log("PM_INIT");
             // `data` is everything_plugin_get_proc_address_t.
             let get: host::FnGetProcAddress = core::mem::transmute(data);
             match host::resolve(get) {

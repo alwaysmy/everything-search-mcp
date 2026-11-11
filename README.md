@@ -50,6 +50,62 @@ Everything's HTTP server enabled on port `23333`
 > allow_file_download=0
 > ```
 
+## Living inside Everything (optional)
+
+The same server also runs *inside* Everything. This repository builds a plugin DLL
+that Everything 1.5 loads into its own process and that binds a loopback MCP
+endpoint there, so the endpoint exists exactly as long as Everything does —
+nothing to supervise, nothing to respawn after a reboot, no orphan stdio children.
+
+Tool calls do not change: they go through the same `everything::Client` over
+Everything's HTTP server. The plugin adds a transport, not a second query path,
+and the stdio executable remains the right choice for clients that only speak
+stdio, for one-shot CLI use, and as a fallback when the plugin is not installed.
+
+### Install
+
+```powershell
+.\install-plugin.ps1                    # build, install, restart Everything, verify
+.\install-plugin.ps1 -NoBuild -NoRestart  # register only
+```
+
+Run it from an elevated PowerShell — the third-party allowlist is under `HKLM`.
+Registration is a file-and-registry job, so it needs no clicking through menus:
+
+| Where | What it holds |
+|---|---|
+| `Plugins\everything_search_mcp64.dll` | the module Everything loads |
+| `Everything.ini` → `plugin_filename`, `plugin_enabled` | load list, one enabled flag per entry, same order |
+| `Plugins.ini` → `[everything_search_mcp64.dll] enabled=1` | start the plugin |
+| `HKLM\SOFTWARE\voidtools\Everything` → `AllowedPlugins` | third-party allowlist |
+
+Two details decide whether it loads at all:
+
+* Everything will not load an unsigned DLL unless its file name is in
+  `AllowedPlugins`, and it says nothing when it refuses — the module simply never
+  appears in the process.
+* `AllowedPlugins` is **semicolon**-separated. A comma-joined list disables every
+  entry in it, including the ones that worked before.
+
+The restart has to be a real exit and start: Everything only loads plugins at
+startup. `install-plugin.ps1` issues the exit, edits the files, then starts
+Everything with `-startup`, which keeps the window out of the foreground.
+
+### Point a client at it
+
+```json
+{
+  "serverName": "everything-search-http",
+  "transport": "streamable-http",
+  "url": "http://127.0.0.1:8286/mcp"
+}
+```
+
+`8286` is the default port; `EVERYTHING_MCP_PORT` overrides it for a host started
+with a different value. The endpoint answers JSON-RPC `initialize`, `tools/list`
+and `tools/call` over `POST /` or `POST /mcp`, with `text/event-stream` responses
+when the client asks for them.
+
 ## Why it is fast
 
 Everything is reached over its built-in HTTP server rather than through `es.exe`,

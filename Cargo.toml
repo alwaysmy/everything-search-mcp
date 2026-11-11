@@ -11,6 +11,15 @@ readme = "README.md"
 name = "everything-search-mcp"
 path = "src/main.rs"
 
+# Shared implementation. The bin above is the standalone stdio MCP server; the
+# cdylib is the Everything 1.5 plugin, which Everything.exe loads into its own
+# process and which serves MCP from there (same tool layer, same HTTP backend).
+# See src/lib.rs and src/plugin/mod.rs.
+[lib]
+name = "everything_mcp_core"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,3 +30,4 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+

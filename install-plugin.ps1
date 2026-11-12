@@ -71,10 +71,21 @@ function Get-EverythingExe([string]$Hint) {
     $running = Get-Process Everything -ErrorAction SilentlyContinue |
         Where-Object { $_.Path } | Select-Object -First 1
     if ($running) { return $running.Path }
-    foreach ($dir in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, 'D:\MyPrograms\1_Tools\Everything')) {
+    foreach ($dir in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
         if (-not $dir) { continue }
         $candidate = Join-Path $dir 'Everything\Everything.exe'
         if (Test-Path $candidate) { return $candidate }
+    }
+    # Portable/elsewhere installs: Everything's uninstall entry keeps the folder.
+    foreach ($key in @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Everything',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Everything'
+        )) {
+        $location = (Get-ItemProperty $key -ErrorAction SilentlyContinue).InstallLocation
+        if ($location) {
+            $candidate = Join-Path $location 'Everything.exe'
+            if (Test-Path $candidate) { return $candidate }
+        }
     }
     throw 'cannot find Everything.exe - pass -EverythingDir'
 }
@@ -83,9 +94,13 @@ function Get-EverythingExe([string]$Hint) {
 # unlink a loaded image, but renaming it is allowed, so free the name first.
 function Clear-Target([string]$Path) {
     if (-not (Test-Path $Path)) { return }
-    $old = "$Path.old"
-    Remove-Item $old -Force -ErrorAction SilentlyContinue
+    # Timestamped: the previous install's aside copy may still be mapped by a
+    # running Everything, and a mapped file cannot be overwritten or deleted.
+    $old = "$Path.old-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
     try { Move-Item $Path $old -Force -ErrorAction Stop } catch { Remove-Item $Path -Force }
+    Get-ChildItem (Split-Path $Path) -Filter ((Split-Path $Path -Leaf) + '.old-*') -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-10) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 # Rewrite one `key=value` line of an ini-style file, keeping every other line.

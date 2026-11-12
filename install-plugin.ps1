@@ -253,26 +253,14 @@ $body = @{
         clientInfo      = @{ name = 'install-plugin'; version = '1' }
     }
 } | ConvertTo-Json -Depth 6
-# The port can be open a moment before the listener is ready to answer, and
-# Windows PowerShell 5.1 surfaces that as a bare NullReferenceException from
-# Invoke-WebRequest rather than a connection error. Retry instead of reporting a
-# failed install that actually succeeded.
-$server = $null
-$verifyError = $null
-foreach ($attempt in 1..5) {
-    try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/mcp" -Method Post `
-            -Headers @{ Accept = 'application/json, text/event-stream' } `
-            -ContentType 'application/json' -Body $body -TimeoutSec 15 -UseBasicParsing
-        $server = ($response.Content | ConvertFrom-Json).result.serverInfo
-        if ($server) { break }
-    } catch {
-        $verifyError = $_
-        Start-Sleep -Milliseconds 500
-    }
-}
-if (-not $server) {
-    throw "endpoint on $Port did not answer initialize: $($verifyError.Exception.Message)"
-}
+# -UseBasicParsing is not optional here. On Windows PowerShell 5.1 the default
+# path drives the IE engine, and when that engine is unavailable Invoke-WebRequest
+# throws a bare NullReferenceException - on a request that actually succeeded.
+# Confirmed deterministic: same body, same endpoint, with the switch removed the
+# call fails every time. Do not "fix" this with a retry loop; it hides a real bug.
+$response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/mcp" -Method Post `
+    -Headers @{ Accept = 'application/json, text/event-stream' } `
+    -ContentType 'application/json' -Body $body -TimeoutSec 15 -UseBasicParsing
+$server = ($response.Content | ConvertFrom-Json).result.serverInfo
 Write-Host "verified $($server.name) $($server.version)"
 if (Test-Path $log) { Get-Content $log | ForEach-Object { Write-Host "log     $_" } }

@@ -115,9 +115,15 @@ fn url_desc_single() -> String {
 /// `local` first, then whatever the registry holds. Listed even when the registry
 /// cannot be read, because `local` always works.
 fn known_names() -> String {
-    let registered = servers::Registry::load().map(|r| r.names()).unwrap_or_default();
+    let registered = servers::Registry::load()
+        .map(|r| r.names())
+        .unwrap_or_default();
     let mut names: Vec<String> = vec![servers::LOCAL.to_string()];
-    names.extend(registered.into_iter().filter(|n| !n.eq_ignore_ascii_case(servers::LOCAL)));
+    names.extend(
+        registered
+            .into_iter()
+            .filter(|n| !n.eq_ignore_ascii_case(servers::LOCAL)),
+    );
     names.join(", ")
 }
 
@@ -177,8 +183,20 @@ fn backend_schema() -> Value {
 
 /// Argument names `everything_search` understands.
 const SEARCH_ARGS: &[&str] = &[
-    "query", "category", "entry_type", "path", "max_results", "offset", "sort", "match_case",
-    "match_whole_word", "match_regex", "match_path", "max_per_parent", "include_total", "probe",
+    "query",
+    "category",
+    "entry_type",
+    "path",
+    "max_results",
+    "offset",
+    "sort",
+    "match_case",
+    "match_whole_word",
+    "match_regex",
+    "match_path",
+    "max_per_parent",
+    "include_total",
+    "probe",
     "url",
 ];
 
@@ -199,10 +217,17 @@ fn unknown_args_hint(args: &Value, known: &[&str]) -> String {
     }
     let mut s = format!(
         "\nNote: argument(s) not understood by this tool and therefore ignored: {}.",
-        unknown.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", ")
+        unknown
+            .iter()
+            .map(|u| format!("'{u}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     for u in &unknown {
-        if let Some(k) = known.iter().find(|k| k.contains(u.as_str()) || u.contains(*k)) {
+        if let Some(k) = known
+            .iter()
+            .find(|k| k.contains(u.as_str()) || u.contains(*k))
+        {
             s.push_str(&format!(" '{u}' looks like a misspelling of '{k}'."));
         }
     }
@@ -418,11 +443,19 @@ fn compile(f: &Filters) -> Result<String, String> {
         "file" => parts.push("file:".to_string()),
         "folder" => parts.push("folder:".to_string()),
         "any" | "" => {}
-        other => return Err(format!("invalid entry_type '{other}'. Valid: file, folder, any")),
+        other => {
+            return Err(format!(
+                "invalid entry_type '{other}'. Valid: file, folder, any"
+            ))
+        }
     }
     if let Some(c) = f.category.filter(|c| !c.trim().is_empty()) {
-        let clause = everything::file_type_query(c)
-            .ok_or_else(|| format!("invalid category '{c}'. Valid: {}", everything::file_type_names().join(", ")))?;
+        let clause = everything::file_type_query(c).ok_or_else(|| {
+            format!(
+                "invalid category '{c}'. Valid: {}",
+                everything::file_type_names().join(", ")
+            )
+        })?;
         parts.push(clause.to_string());
     }
     let tail = f.raw.trim();
@@ -599,7 +632,11 @@ fn resolve_backends(base: &Config, args: &Value) -> Result<Vec<Backend>, String>
 }
 
 fn backend_for(base: &Config, e: &servers::Entry) -> Result<Backend, String> {
-    Ok(Backend { name: e.name.clone(), url: e.url.clone(), config: base.retarget(&e.url)? })
+    Ok(Backend {
+        name: e.name.clone(),
+        url: e.url.clone(),
+        config: base.retarget(&e.url)?,
+    })
 }
 
 /// This machine as an instance: the address registered for `local` if there is one,
@@ -614,7 +651,11 @@ fn local_backend(base: &Config, reg: &servers::Registry) -> Result<Backend, Stri
         .get(servers::LOCAL)
         .map(|e| e.url.clone())
         .unwrap_or_else(servers::local_url);
-    Ok(Backend { name: servers::LOCAL.to_string(), config: base.retarget(&url)?, url })
+    Ok(Backend {
+        name: servers::LOCAL.to_string(),
+        config: base.retarget(&url)?,
+        url,
+    })
 }
 
 /// The one instance a single-machine tool (`everything_file_details`) runs against.
@@ -637,7 +678,9 @@ fn resolve_single_backend(base: &Config, args: &Value) -> Result<Backend, String
             backends.len()
         ));
     }
-    backends.pop().ok_or_else(|| "url named no instance to inspect".to_string())
+    backends
+        .pop()
+        .ok_or_else(|| "url named no instance to inspect".to_string())
 }
 
 /// A display name for an address that was passed directly instead of by name.
@@ -651,9 +694,7 @@ fn label_for_url(u: &str) -> String {
 /// filesystem or has to be resolved against a remote index - the two answers differ
 /// in what they can report, so guessing here would be guessing about correctness.
 fn is_loopback(cfg: &Config) -> bool {
-    cfg.host.eq_ignore_ascii_case("localhost")
-        || cfg.host == "::1"
-        || cfg.host.starts_with("127.")
+    cfg.host.eq_ignore_ascii_case("localhost") || cfg.host == "::1" || cfg.host.starts_with("127.")
 }
 
 /// Run one query shape against every instance and collect one group per instance.
@@ -934,7 +975,10 @@ impl Handler for Tools {
 // ---------------------------------------------------------------- arg helpers
 
 fn s(args: &Value, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 fn s_or(args: &Value, key: &str, default: &str) -> String {
     let v = s(args, key);
@@ -945,7 +989,10 @@ fn s_or(args: &Value, key: &str, default: &str) -> String {
     }
 }
 fn u(args: &Value, key: &str, default: usize) -> usize {
-    args.get(key).and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(default)
+    args.get(key)
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(default)
 }
 fn b(args: &Value, key: &str, default: bool) -> bool {
     args.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
@@ -1302,7 +1349,9 @@ impl Tools {
                 head.push_str(&format!("query: {query}\n"));
             }
             if diversified {
-                head.push_str(&format!("diversified: at most {max_per_parent} per parent directory\n"));
+                head.push_str(&format!(
+                    "diversified: at most {max_per_parent} per parent directory\n"
+                ));
             }
             head.push_str(&format!("effective query: {effective}\n"));
             if !match_modes.is_empty() {
@@ -1448,9 +1497,9 @@ impl Tools {
         // One machine having little recent activity is normal and is not evidence
         // that the period was wrong; widening for it would bury the other machines'
         // real hits under everything they ever wrote.
-        let thin = groups.iter().all(|g| {
-            g.error.is_some() || (g.items.len() < max && g.total < max as u64)
-        });
+        let thin = groups
+            .iter()
+            .all(|g| g.error.is_some() || (g.items.len() < max && g.total < max as u64));
         let expanded = auto_expand && thin && groups.iter().any(|g| g.error.is_none());
         if expanded {
             effective = build(false);
@@ -1481,11 +1530,19 @@ impl Tools {
                 g.items.iter().map(move |i| item_json(i, src))
             })
             .collect();
-        let effective_period = if expanded { "all time".to_string() } else { requested_period.clone() };
+        let effective_period = if expanded {
+            "all time".to_string()
+        } else {
+            requested_period.clone()
+        };
 
         let mut text = format!(
             "recent: requested {requested_period}, effective {effective_period}{}\n",
-            if expanded { "  (window too narrow - widened to all time)" } else { "" }
+            if expanded {
+                "  (window too narrow - widened to all time)"
+            } else {
+                ""
+            }
         );
         text.push_str(&format!("effective query: {effective}\n\n"));
         text.push_str(&render_groups(&groups, 0));
@@ -1769,7 +1826,11 @@ impl Tools {
 
         text.push_str(&format!("  source: {} ({})\n", backend.name, backend.url));
         if let Some(sz) = item.size {
-            text.push_str(&format!("  size: {} ({} bytes)\n", everything::human_size(sz), sz));
+            text.push_str(&format!(
+                "  size: {} ({} bytes)\n",
+                everything::human_size(sz),
+                sz
+            ));
         }
         if let Some(m) = &item.modified {
             text.push_str(&format!("  modified: {m}\n"));
@@ -1866,13 +1927,10 @@ impl Tools {
             );
             for g in &groups {
                 match &g.error {
-                    Some(_) => t.push_str(&format!("=== {} ({}) - unreachable\n", g.name(), g.url())),
-                    None => t.push_str(&format!(
-                        "=== {} ({}) - {}\n",
-                        g.name(),
-                        g.url(),
-                        g.total
-                    )),
+                    Some(_) => {
+                        t.push_str(&format!("=== {} ({}) - unreachable\n", g.name(), g.url()))
+                    }
+                    None => t.push_str(&format!("=== {} ({}) - {}\n", g.name(), g.url(), g.total)),
                 }
             }
             t.push('\n');
@@ -2041,7 +2099,10 @@ impl Tools {
             // a total — the reported confusion — so the sample size is spelled out
             // and, when the sample is partial, so is the word used for the column.
             let column = if covers_all { "count" } else { "in sample" };
-            text.push_str(&format!("  {:<12} {:>9}  {}\n", "extension", column, "size"));
+            text.push_str(&format!(
+                "  {:<12} {:>9}  {}\n",
+                "extension", column, "size"
+            ));
             for (ext, (n, sz)) in by_ext.iter().take(40) {
                 text.push_str(&format!(
                     "  {ext:<12} {n:>9}  {}\n",
@@ -2109,8 +2170,10 @@ impl Tools {
                 }
                 Err(e) => {
                     text.push_str(&format!("===== query {} : error: {e}\n", i + 1));
-                    per_query.push(json!({"query": q.get("query").cloned().unwrap_or(json!("")),
-                                          "error": e}));
+                    per_query.push(
+                        json!({"query": q.get("query").cloned().unwrap_or(json!("")),
+                                          "error": e}),
+                    );
                 }
             }
             if total_returned >= max_total {
@@ -2156,7 +2219,10 @@ mod tests {
             file.push(format!("evmcp-test-registry-{}.json", std::process::id()));
             std::fs::write(&file, body).expect("write the test registry");
             std::env::set_var(servers::ENV_FILE, &file);
-            Self { file, _guard: guard }
+            Self {
+                file,
+                _guard: guard,
+            }
         }
     }
 
@@ -2195,7 +2261,10 @@ mod tests {
         // Two machines cannot be described by one answer, and that stays refused.
         let err = resolve_single_backend(&base, &json!({"url": ["local", "workshop"]}))
             .expect_err("two machines must be refused");
-        assert!(err.contains("one machine at a time"), "unexpected error: {err}");
+        assert!(
+            err.contains("one machine at a time"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

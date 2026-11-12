@@ -59,9 +59,15 @@ fn mcp_handshake_and_tool_list_over_loopback_http() {
             }
         }),
     );
-    assert_eq!(init["result"]["serverInfo"]["name"], "everything_search_mcp");
+    assert_eq!(
+        init["result"]["serverInfo"]["name"],
+        "everything_search_mcp"
+    );
 
-    let listed = rpc(port, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+    let listed = rpc(
+        port,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    );
     let tools = listed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("no tools in {listed}"));
@@ -69,7 +75,11 @@ fn mcp_handshake_and_tool_list_over_loopback_http() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    for expected in ["everything_search", "everything_count_stats", "everything_file_details"] {
+    for expected in [
+        "everything_search",
+        "everything_count_stats",
+        "everything_file_details",
+    ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
 
@@ -118,14 +128,17 @@ fn concurrent_requests_do_not_queue_behind_each_other() {
                     // peer request. A serialized endpoint never gets to the peer.
                     self.entered.send(()).ok();
                     let channel = self.waiting.lock().unwrap();
-                    channel
-                        .recv_timeout(Duration::from_secs(10))
-                        .map_err(|_| "peer request never arrived: calls were serialized".to_string())?;
+                    channel.recv_timeout(Duration::from_secs(10)).map_err(|_| {
+                        "peer request never arrived: calls were serialized".to_string()
+                    })?;
                     Ok(ToolOutput::new("released", core_json!({"ok": true})))
                 }
                 "release" => {
                     self.release.lock().unwrap().send(()).ok();
-                    Ok(ToolOutput::new("released the peer", core_json!({"ok": true})))
+                    Ok(ToolOutput::new(
+                        "released the peer",
+                        core_json!({"ok": true}),
+                    ))
                 }
                 other => Err(format!("unknown tool {other}")),
             }
@@ -225,4 +238,3 @@ fn every_request_builds_its_own_server() {
 
     endpoint.stop();
 }
-

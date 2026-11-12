@@ -232,7 +232,14 @@ fn handle_connection<H: Handler + Send + 'static>(
             if request.method == "GET" || request.method == "DELETE" {
                 extra.push_str("Mcp-Allow: POST\r\n");
             }
-            let _ = write_response(&mut stream, 405, "Method Not Allowed", "text/plain", &extra, b"");
+            let _ = write_response(
+                &mut stream,
+                405,
+                "Method Not Allowed",
+                "text/plain",
+                &extra,
+                b"",
+            );
             return Ok(());
         }
     }
@@ -326,7 +333,14 @@ fn write_plain(
     reason: &str,
     text: &str,
 ) -> std::io::Result<()> {
-    write_response(stream, status, reason, "text/plain; charset=utf-8", "", text.as_bytes())
+    write_response(
+        stream,
+        status,
+        reason,
+        "text/plain; charset=utf-8",
+        "",
+        text.as_bytes(),
+    )
 }
 
 fn write_response(

@@ -22,8 +22,27 @@ const AMBIGUOUS: &[&str] = &[
 
 /// Text-ish extensions that no category covers.
 const TEXT_EXTS: &[&str] = &[
-    "log", "nfo", "diff", "patch", "srt", "vtt", "tex", "bib", "org", "adoc", "asciidoc",
-    "readme", "license", "authors", "changelog", "todo", "mk", "am", "ac", "m4", "in",
+    "log",
+    "nfo",
+    "diff",
+    "patch",
+    "srt",
+    "vtt",
+    "tex",
+    "bib",
+    "org",
+    "adoc",
+    "asciidoc",
+    "readme",
+    "license",
+    "authors",
+    "changelog",
+    "todo",
+    "mk",
+    "am",
+    "ac",
+    "m4",
+    "in",
 ];
 
 /// Extensions that belong to a binary category but are actually plain text.
@@ -174,7 +193,11 @@ pub fn classify(name: &str) -> TypeInfo {
 
     if AMBIGUOUS.contains(&ext) {
         return TypeInfo {
-            kind: ext_to_kind().get(ext).copied().unwrap_or("unknown").to_string(),
+            kind: ext_to_kind()
+                .get(ext)
+                .copied()
+                .unwrap_or("unknown")
+                .to_string(),
             content_mode: "unknown".into(),
             format: friendly_format(ext).to_string(),
             type_source: "extension".into(),
@@ -379,7 +402,11 @@ pub fn encoding_of(bytes: &[u8]) -> &'static str {
         let n = bytes.len().min(512);
         let even_nul = (0..n).step_by(2).filter(|i| bytes[*i] == 0).count();
         let odd_nul = (1..n).step_by(2).filter(|i| bytes[*i] == 0).count();
-        return if odd_nul > even_nul { "utf-16le" } else { "utf-16be" };
+        return if odd_nul > even_nul {
+            "utf-16le"
+        } else {
+            "utf-16be"
+        };
     }
     "utf-8"
 }
@@ -412,9 +439,17 @@ mod tests {
     #[test]
     fn kinds_come_from_the_search_category_table() {
         for (name, kind) in [
-            ("a.rs", "code"), ("a.py", "code"), ("a.png", "image"), ("a.pdf", "document"),
-            ("a.zip", "archive"), ("a.exe", "executable"), ("a.mp3", "audio"),
-            ("a.mp4", "video"), ("a.ttf", "font"), ("a.stl", "3d"), ("a.csv", "data"),
+            ("a.rs", "code"),
+            ("a.py", "code"),
+            ("a.png", "image"),
+            ("a.pdf", "document"),
+            ("a.zip", "archive"),
+            ("a.exe", "executable"),
+            ("a.mp3", "audio"),
+            ("a.mp4", "video"),
+            ("a.ttf", "font"),
+            ("a.stl", "3d"),
+            ("a.csv", "data"),
         ] {
             assert_eq!(classify(name).kind, kind, "{name}");
         }
@@ -428,7 +463,10 @@ mod tests {
 
         let docx = classify("x.docx");
         assert_eq!(docx.kind, "document");
-        assert_eq!(docx.content_mode, "binary", "a docx is a document and binary");
+        assert_eq!(
+            docx.content_mode, "binary",
+            "a docx is a document and binary"
+        );
 
         let rs = classify("x.rs");
         assert_eq!(rs.kind, "code");

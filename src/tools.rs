@@ -258,6 +258,8 @@ fn results_output_schema() -> Value {
             "has_more": {"type": ["boolean", "null"], "description": "null if failed backends leave remaining results unknown"},
             "backends": backend_schema(),
             "results": {"type": "array", "items": item_schema()},
+            "warnings": {"type": "array", "items": {"type": "string"},
+                "description": "non-fatal problems with the request, e.g. 'path not found: D:\\\\X'. A zero total with this warning means the scope was wrong, not that the directory is empty"},
             "elapsed_ms": {"type": "number"}
         },
         "required": ["query", "effective_query", "match_modes", "total", "total_accuracy",
@@ -348,6 +350,8 @@ fn stats_output_schema() -> Value {
             "count_accuracy": {"type": "string", "enum": ["exact", "partial"],
                 "description": "partial if any requested index is unreachable"},
             "count_scope": {"type": "string", "enum": ["all requested indexes", "reachable indexes"]},
+            "warnings": {"type": "array", "items": {"type": "string"},
+                "description": "non-fatal problems with the request; 'path not found: ...' means the zero is a wrong scope, not an empty directory"},
             "total_size": {"type": "integer",
                 "description": "absent when no exact sum was requested or the row cap was hit"},
             "total_size_accuracy": {"type": "string", "enum": ["exact", "unavailable"]},
@@ -425,6 +429,23 @@ struct Filters<'a> {
     entry_type: &'a str,
     path: Option<&'a str>,
     regex: bool,
+}
+
+/// A warning when the caller scoped a query to a directory that is not there.
+///
+/// Everything answers `0 results` for a path that does not exist, which is
+/// indistinguishable from "this directory really has no matching files" — the one
+/// failure mode this server must not have. The filesystem check is only paid when
+/// the answer is empty, so a normal query never touches the disk.
+fn missing_path_warning(path: Option<&str>, total: u64) -> Option<String> {
+    if total != 0 {
+        return None;
+    }
+    let path = path?.trim();
+    if path.is_empty() || Path::new(path).exists() {
+        return None;
+    }
+    Some(format!("path not found: {path}"))
 }
 
 /// Compile the typed arguments into one Everything expression.
@@ -1362,6 +1383,7 @@ impl Tools {
         }
 
         let total = summed_total(&groups);
+        let path_warning = missing_path_warning(path.as_deref(), total);
         let returned = total_returned(&groups);
         let next = next_cursor(&groups, offset);
         let has_more = any_has_more(&groups, offset);
@@ -1399,6 +1421,11 @@ impl Tools {
             head.push_str(&render_groups(&groups, offset));
             head
         };
+        // Say it loudly: "0 results" from a directory that does not exist is the
+        // answer that looks exactly like a real empty directory.
+        if let Some(warning) = &path_warning {
+            text.insert_str(0, &format!("warning: {warning}\n\n"));
+        }
         if include_total && returned == 0 {
             text.push_str(&format!(
                 "Total matches: {total} ({})\n",
@@ -1425,6 +1452,7 @@ impl Tools {
             "next_offset": next,
             "has_more": has_more,
             "results": results,
+            "warnings": path_warning.iter().cloned().collect::<Vec<String>>(),
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
         if next.is_none() {
@@ -1946,6 +1974,7 @@ impl Tools {
         fail_if_sole_backend(&groups)?;
 
         let total = summed_total(&groups);
+        let path_warning = missing_path_warning(path.as_deref(), total);
         let reachable = groups.iter().filter(|g| g.error.is_none()).count();
         let multi = groups.len() > 1;
 
@@ -1953,6 +1982,7 @@ impl Tools {
             "query": query,
             "effective_query": effective,
             "count": total,
+            "warnings": path_warning.iter().cloned().collect::<Vec<String>>(),
             "count_accuracy": total_accuracy(&groups),
             "count_scope": if total_accuracy(&groups)=="exact" {"all requested indexes"} else {"reachable indexes"},
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
@@ -1979,6 +2009,9 @@ impl Tools {
         } else {
             format!("count: {total} (exact)\neffective query: {effective}\n")
         };
+        if let Some(warning) = &path_warning {
+            text.insert_str(0, &format!("warning: {warning}\n\n"));
+        }
 
         if include_size {
             // Each instance is summed on its own and the results added: both halves
@@ -2326,4 +2359,23 @@ mod tests {
         );
     }
     include!("tools/regression_tests.rs");
+}
+
+#[cfg(test)]
+mod path_warning_tests {
+    use super::missing_path_warning;
+
+    #[test]
+    fn warns_only_for_a_missing_path_on_an_empty_result() {
+        let missing = std::env::temp_dir().join("everything-mcp-no-such-dir-xyz123");
+        let missing = missing.to_str().unwrap();
+
+        assert!(missing_path_warning(Some(missing), 0).is_some());
+        // A non-empty answer proves the scope existed; no filesystem check needed.
+        assert!(missing_path_warning(Some(missing), 3).is_none());
+        assert!(missing_path_warning(None, 0).is_none());
+
+        let here = std::env::temp_dir();
+        assert!(missing_path_warning(Some(here.to_str().unwrap()), 0).is_none());
+    }
 }

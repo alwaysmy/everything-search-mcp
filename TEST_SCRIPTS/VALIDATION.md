@@ -66,6 +66,16 @@ from 0.617 ms to 0.145 ms p50, and `search max_results=20` from 1.514 ms to
 0.837 ms, which puts the endpoint's overhead within noise of querying Everything's
 HTTP server directly.
 
+Keep-alive has a cost, and the tests pin it rather than trusting it: an idle
+socket holds a thread, and this runs inside Everything.exe. Measured: 100 idle
+connections took the host from 30 to 130 threads. Three tests close that hole -
+`refuses_connections_beyond_the_limit` (503 past the cap, slot released after),
+`closes_an_idle_kept_alive_connection` (idle window closes the socket), plus the
+framing pair `answers_expect_100_continue_before_the_body` and
+`refuses_chunked_request_bodies`. Verified live against the deployed plugin:
+100 sockets now stop at 78 threads (14 baseline + 64 cap) and an idle connection
+closes at 4.9 s.
+
 `TEST_SCRIPTS/multi-client-stress.ps1` covers the other half of the claim - that
 concurrent callers each get *their own* answer rather than a neighbour's. Ten
 independent clients run their own query in parallel and every returned row must

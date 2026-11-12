@@ -8,6 +8,11 @@
 //!   *where the MCP endpoint lives* — it rides on Everything's lifetime instead of
 //!   being a separately supervised process.
 
+// The `Handler` trait is public and its signatures name `serde_json::Value`, so
+// integration tests implementing it need *this* crate's serde_json instance, not
+// whichever one resolves in their own dependency graph.
+pub use serde_json;
+
 pub mod cli;
 pub mod everything;
 pub mod filetype;

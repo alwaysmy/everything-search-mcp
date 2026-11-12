@@ -26,8 +26,9 @@
 //!   calls that justify the marshaling can be added behind the same tool API later.
 //!
 //! Settings today come from the environment (`EVERYTHING_MCP_PORT`,
-//! `EVERYTHING_MCP_BIND`); an Everything options page can replace that once the
-//! settings API is wired up.
+//! `EVERYTHING_MCP_MAX_CONNECTIONS`); an Everything options page can replace that
+//! once the settings API is wired up. The bind address is not configurable on
+//! purpose: loopback-only is the security boundary this endpoint relies on.
 //!
 //! # Safety posture
 //!
@@ -101,7 +102,20 @@ pub fn start_endpoint(port: u16) -> std::io::Result<u16> {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     if let Some(running) = slot.as_ref() {
-        return Ok(running.addr().port());
+        let current = running.addr().port();
+        if current == port {
+            return Ok(current);
+        }
+        // A changed EVERYTHING_MCP_PORT must take effect instead of silently
+        // keeping the old listener.
+        log(&format!(
+            "port changed {current} -> {port}; restarting endpoint"
+        ));
+        drop(slot);
+        stop_endpoint();
+        slot = endpoint_slot()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
     }
     let endpoint = Endpoint::start(port, shared_handler())?;
     let bound = endpoint.addr().port();
@@ -134,6 +148,10 @@ pub unsafe extern "system" fn everything_plugin_proc(msg: u32, data: *mut c_void
         PM_INIT => {
             log("PM_INIT");
             // `data` is everything_plugin_get_proc_address_t.
+            if data.is_null() {
+                log("PM_INIT with a null host table");
+                return core::ptr::null_mut();
+            }
             let get: host::FnGetProcAddress = core::mem::transmute(data);
             match host::resolve(get) {
                 Ok(()) => HANDLED,
@@ -170,7 +188,11 @@ pub unsafe extern "system" fn everything_plugin_proc(msg: u32, data: *mut c_void
             log("stopped (Everything is shutting down)");
             HANDLED
         }
-        PM_KILL => HANDLED,
+        PM_KILL => {
+            stop_endpoint();
+            log("killed by the host (PM_KILL)");
+            HANDLED
+        }
         PM_UNINSTALL => HANDLED,
         _ => core::ptr::null_mut(),
     }

@@ -33,7 +33,7 @@ install a Rust toolchain to run a file search plugin.
 
 **1. Get the binary.** Download `everything-search-mcp.exe` from
 [Releases](https://github.com/alwaysmy/everything-search-mcp/releases), or grab
-`everything-search-skill.zip`, which is the binary plus the agent-facing skill
+`everything-search-skill-<v>.zip`, which is the binary plus the agent-facing skill
 that explains how to use the tools well.
 
 **2. Point your clients at it.** The executable knows its own absolute path, so
@@ -143,7 +143,7 @@ Against the original Python implementation, same query and machine:
 |---|---:|---:|---|
 | MCP `tools/call` round trip | 134.0 ms | **0.53 ms** | 251× |
 | Cold start (spawn + `initialize`) | 1681 ms | **5 ms** | 336× |
-| Distribution size | interpreter + deps | **~580 KB** | — |
+| Distribution size | interpreter + deps | **~840 KB** | — |
 
 Dropping the interpreter buys one order of magnitude; the transport change buys
 the rest.
@@ -418,7 +418,7 @@ client that greps the body for `"Error:"` would need updating.
 
 ```powershell
 cargo build --release      # -> target\release\everything-search-mcp.exe
-cargo test                 # 29 unit tests
+cargo test                 # 55 unit + 8 integration tests
 .\deploy.ps1               # build, then install into the skill dir + hard-link onto PATH
 .\deploy.ps1 -NoBuild      # deploy what is already built
 ```

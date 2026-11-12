@@ -19,7 +19,7 @@ __pycache__/
 docs/gpt_qa/
 
 # Deployed binary + its lock-litter live in the skill dir (managed by deploy.ps1,
-# reachable via junctions from ~\.agents\skills and D:\AI\AgentsSkills)
+# reachable via junctions from an agent skills directory)
 skills/everything-search/bin/
 
 # Release archives assembled by release.ps1

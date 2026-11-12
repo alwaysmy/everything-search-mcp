@@ -9,10 +9,11 @@
 //! server: no session id is issued and no server-initiated stream is opened, so
 //! `GET` is `405`, exactly as the spec allows for servers that offer no SSE stream.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -33,7 +34,9 @@ use crate::jsonrpc::{Handler, Server};
 pub type HandlerFactory<H> = Arc<dyn Fn() -> Server<H> + Send + Sync>;
 
 const MAX_HEAD: usize = 64 * 1024;
-const MAX_BODY: usize = 4 * 1024 * 1024;
+/// Request body cap. MCP `tools/call` payloads are a few hundred bytes; 4 MiB
+/// only created a memory ceiling of `MAX_BODY × MAX_CONNECTIONS`.
+const MAX_BODY: usize = 256 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a connection may sit idle between requests before it is closed.
@@ -73,6 +76,11 @@ struct Limits {
     open: AtomicUsize,
     max_connections: usize,
     idle: Duration,
+    /// Live connection sockets, so [`Endpoint::stop`] can force every handler
+    /// thread out of its blocking read instead of abandoning it inside a DLL that
+    /// the host is about to unload.
+    sockets: Mutex<HashMap<u64, TcpStream>>,
+    next_id: AtomicU64,
 }
 
 impl Limits {
@@ -81,16 +89,26 @@ impl Limits {
             open: AtomicUsize::new(0),
             max_connections,
             idle,
+            sockets: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(0),
         })
     }
 }
 
-/// Holds one connection slot until that connection's thread ends.
-struct ConnSlot(Arc<Limits>);
+/// One connection's slot and registry entry, released when its thread ends.
+struct ConnSlot {
+    limits: Arc<Limits>,
+    id: u64,
+}
 
 impl Drop for ConnSlot {
     fn drop(&mut self) {
-        self.0.open.fetch_sub(1, Ordering::SeqCst);
+        self.limits
+            .sockets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&self.id);
+        self.limits.open.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -99,6 +117,7 @@ pub struct Endpoint<H: Handler + Send + 'static> {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    limits: Arc<Limits>,
     /// The handler type is only carried so callers stay typed end to end; the
     /// listener thread owns the factory and never hands it back.
     handler: std::marker::PhantomData<H>,
@@ -121,16 +140,21 @@ impl<H: Handler + Send + 'static> Endpoint<H> {
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let addr = listener.local_addr()?;
+        // Non-blocking accept: the loop polls the stop flag, so shutdown never
+        // depends on a self-connect wake-up succeeding.
+        listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_in_thread = Arc::clone(&stop);
         let limits = Limits::new(max_connections, idle);
+        let limits_in_thread = Arc::clone(&limits);
         let thread = std::thread::Builder::new()
             .name("everything-mcp-http".into())
-            .spawn(move || accept_loop(listener, stop_in_thread, handler, limits))?;
+            .spawn(move || accept_loop(listener, stop_in_thread, handler, limits_in_thread))?;
         Ok(Self {
             addr,
             stop,
             thread: Some(thread),
+            limits,
             handler: std::marker::PhantomData,
         })
     }
@@ -140,13 +164,36 @@ impl<H: Handler + Send + 'static> Endpoint<H> {
         self.addr
     }
 
-    /// Stop accepting and wait for the listener thread to finish.
+    /// Stop accepting, evict every live connection, and wait for the threads.
+    ///
+    /// This runs on Everything's main thread just before the host may unload the
+    /// DLL, so it must not return while a handler thread is still executing code
+    /// from this module. Connections are shut down by socket (their blocking read
+    /// then fails and the thread exits), then the accept thread is joined, then
+    /// the slot count is awaited.
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Wake the blocking accept() so the loop can observe the flag.
-        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(500));
+
+        // Clone-free shutdown: each handler owns a dup of its socket.
+        let sockets = self
+            .limits
+            .sockets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for socket in sockets.values() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+        drop(sockets);
+
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+
+        // Handlers wake from the shutdown within milliseconds; the bound is a
+        // backstop, not the expected path.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while self.limits.open.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 }
@@ -163,12 +210,19 @@ fn accept_loop<H: Handler + Send + 'static>(
     handler: HandlerFactory<H>,
     limits: Arc<Limits>,
 ) {
+    // A non-blocking listener turns accept() into a poll, which is what lets
+    // shutdown be a flag check instead of a wake-up packet that may never arrive.
+    let mut consecutive_errors = 0u32;
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
         match listener.accept() {
             Ok((mut stream, _peer)) => {
-                if stop.load(Ordering::SeqCst) {
-                    return;
-                }
+                consecutive_errors = 0;
+                // The listener polls, but each connection must block on read:
+                // inherited non-blocking would turn every request into WouldBlock.
+                let _ = stream.set_nonblocking(false);
                 // Take a slot before spawning: the thread is the thing being
                 // bounded, and a refused connection costs one write and no thread.
                 if limits.open.fetch_add(1, Ordering::SeqCst) >= limits.max_connections {
@@ -182,27 +236,67 @@ fn accept_loop<H: Handler + Send + 'static>(
                     );
                     continue;
                 }
-                let slot = ConnSlot(Arc::clone(&limits));
+                let id = limits.next_id.fetch_add(1, Ordering::SeqCst);
+                // The handler keeps its own handle; the registry holds a dup so
+                // stop() can shut the connection down from the main thread.
+                if let Ok(control) = stream.try_clone() {
+                    limits
+                        .sockets
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .insert(id, control);
+                }
+                let slot = ConnSlot {
+                    limits: Arc::clone(&limits),
+                    id,
+                };
                 let idle = limits.idle;
                 let handler = Arc::clone(&handler);
+                let stop_for_thread = Arc::clone(&stop);
                 // One short-lived thread per request: the backend call is what
                 // takes time, and it already runs in parallel.
                 let _ = std::thread::Builder::new()
                     .name("everything-mcp-conn".into())
+                    // A blocking read needs no 2 MB of stack.
+                    .stack_size(256 * 1024)
                     .spawn(move || {
-                        // Dropped with the thread, releasing the connection slot.
+                        // Dropped with the thread, releasing the slot and the
+                        // registry entry.
                         let _slot = slot;
-                        let _ = handle_connection(stream, handler, idle);
+                        let _ = handle_connection(stream, handler, idle, stop_for_thread);
                     });
             }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             Err(_) => {
-                if stop.load(Ordering::SeqCst) {
+                // Handle exhaustion is persistent, not transient: backing off
+                // keeps a spinning thread out of the host's process.
+                consecutive_errors += 1;
+                if consecutive_errors > 50 {
                     return;
                 }
-                // Transient accept failure (e.g. ECONNABORTED): keep serving.
-                std::thread::yield_now();
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
+    }
+}
+
+/// Why a request could not be read.
+///
+/// The distinction matters to the client: closing silently is right when the peer
+/// went away, and wrong when the request was invalid — that shows up as "tool call
+/// hung / connection reset" with nothing to diagnose.
+enum ReadFault {
+    /// Peer closed, timed out, or the socket was shut down by [`Endpoint::stop`].
+    Closed,
+    /// Protocol error worth a status line before the socket closes.
+    Protocol(u16, &'static str, &'static str),
+}
+
+impl From<std::io::Error> for ReadFault {
+    fn from(_: std::io::Error) -> Self {
+        ReadFault::Closed
     }
 }
 
@@ -210,6 +304,8 @@ struct Request {
     method: String,
     path: String,
     accept: String,
+    origin: String,
+    content_type: String,
     keep_alive: bool,
     /// `Transfer-Encoding: chunked`. Not implemented — refused with 411 rather
     /// than mis-read as an empty body, which is what a Content-Length-only parser
@@ -228,38 +324,68 @@ struct Conn {
     buf: Vec<u8>,
 }
 
+/// How often a blocking read wakes up to check whether the endpoint is stopping.
+/// A recv() cannot be cancelled from another thread on Windows, so shutdown has to
+/// be observed by polling rather than assumed.
+const STOP_POLL: Duration = Duration::from_millis(200);
+
 impl Conn {
     fn new(stream: TcpStream) -> Self {
-        let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+        let _ = stream.set_read_timeout(Some(STOP_POLL));
         let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+        // Two writes per response; Nagle would add tens of milliseconds on some
+        // stacks, which is the same order as the whole endpoint budget.
+        let _ = stream.set_nodelay(true);
         Self {
             stream,
             buf: Vec::with_capacity(4096),
         }
     }
 
-    fn set_read_timeout(&mut self, timeout: Duration) {
-        let _ = self.stream.set_read_timeout(Some(timeout));
+    /// One read that wakes at least every [`STOP_POLL`] and honours both the
+    /// endpoint's stop flag and the request's own deadline.
+    fn read_chunk(
+        &mut self,
+        chunk: &mut [u8],
+        stop: &AtomicBool,
+        deadline: std::time::Instant,
+    ) -> Result<usize, ReadFault> {
+        loop {
+            match self.stream.read(chunk) {
+                Ok(0) => return Err(ReadFault::Closed),
+                Ok(n) => return Ok(n),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if stop.load(Ordering::SeqCst) || std::time::Instant::now() >= deadline {
+                        return Err(ReadFault::Closed);
+                    }
+                }
+                Err(_) => return Err(ReadFault::Closed),
+            }
+        }
     }
 
-    fn read_request(&mut self) -> std::io::Result<Request> {
+    fn read_request(&mut self, stop: &AtomicBool, timeout: Duration) -> Result<Request, ReadFault> {
+        let deadline = std::time::Instant::now() + timeout;
         let mut chunk = [0u8; 4096];
         let head_end = loop {
             if let Some(pos) = find_subslice(&self.buf, b"\r\n\r\n") {
                 break pos;
             }
             if self.buf.len() > MAX_HEAD {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
+                return Err(ReadFault::Protocol(
+                    431,
+                    "Request Header Fields Too Large",
                     "request head too large",
                 ));
             }
-            let n = self.stream.read(&mut chunk)?;
+            let n = self.read_chunk(&mut chunk, stop, deadline)?;
             if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "eof in request head",
-                ));
+                return Err(ReadFault::Closed);
             }
             self.buf.extend_from_slice(&chunk[..n]);
         };
@@ -277,6 +403,8 @@ impl Conn {
         let mut connection = String::new();
         let mut transfer_encoding = String::new();
         let mut expect = String::new();
+        let mut origin = String::new();
+        let mut content_type = String::new();
         for line in lines {
             let Some((name, value)) = line.split_once(':') else {
                 continue;
@@ -284,15 +412,39 @@ impl Conn {
             let name = name.trim().to_ascii_lowercase();
             let value = value.trim();
             match name.as_str() {
-                "content-length" => content_length = value.parse().unwrap_or(0),
+                "content-length" => match value.parse::<usize>() {
+                    Ok(length) => content_length = length,
+                    // A number too large for usize, or not a number at all: a
+                    // Content-Length the parser cannot honour is a protocol error,
+                    // never a zero-length body.
+                    Err(_) => {
+                        return Err(ReadFault::Protocol(
+                            400,
+                            "Bad Request",
+                            "bad Content-Length",
+                        ))
+                    }
+                },
                 "accept" => accept = value.to_ascii_lowercase(),
                 "connection" => connection = value.to_ascii_lowercase(),
                 "transfer-encoding" => transfer_encoding = value.to_ascii_lowercase(),
                 "expect" => expect = value.to_ascii_lowercase(),
+                "origin" => origin = value.to_ascii_lowercase(),
+                "content-type" => content_type = value.to_ascii_lowercase(),
                 _ => {}
             }
         }
         let chunked = transfer_encoding.contains("chunked");
+
+        // Refuse an oversized body *before* inviting it: answering 100 Continue
+        // and then closing makes the client push megabytes into a dead socket.
+        if content_length > MAX_BODY {
+            return Err(ReadFault::Protocol(
+                413,
+                "Payload Too Large",
+                "request body exceeds the limit",
+            ));
+        }
 
         // A client that asked for `100 Continue` is waiting for this line before
         // it sends the body. Without it the server would sit in read() until the
@@ -301,21 +453,12 @@ impl Conn {
             self.stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
             self.stream.flush()?;
         }
-        if content_length > MAX_BODY {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "request body too large",
-            ));
-        }
 
         let body_start = head_end + 4;
         while self.buf.len() < body_start + content_length {
-            let n = self.stream.read(&mut chunk)?;
+            let n = self.read_chunk(&mut chunk, stop, deadline)?;
             if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "eof in request body",
-                ));
+                return Err(ReadFault::Closed);
             }
             self.buf.extend_from_slice(&chunk[..n]);
         }
@@ -336,11 +479,29 @@ impl Conn {
             method,
             path,
             accept,
+            origin,
+            content_type,
             keep_alive,
             chunked,
             body,
         })
     }
+}
+
+/// Whether an `Origin` header names this machine.
+///
+/// The endpoint has no authentication; the only thing that keeps a random web page
+/// from driving it is refusing origins it cannot legitimately have.
+fn is_loopback_origin(origin: &str) -> bool {
+    let rest = match origin.strip_prefix("http://") {
+        Some(rest) => rest,
+        None => match origin.strip_prefix("https://") {
+            Some(rest) => rest,
+            None => return false,
+        },
+    };
+    let host = rest.split(['/', ':']).next().unwrap_or("");
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]")
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -353,6 +514,7 @@ fn handle_connection<H: Handler + Send + 'static>(
     stream: TcpStream,
     handler: HandlerFactory<H>,
     idle: Duration,
+    stop: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     let mut conn = Conn::new(stream);
 
@@ -360,20 +522,26 @@ fn handle_connection<H: Handler + Send + 'static>(
     // loopback handshake costs ~0.17 ms, which was the single largest piece of
     // this endpoint's overhead, and every MCP client reuses connections when the
     // server lets it.
+    let mut first = true;
     loop {
-        let request = match conn.read_request() {
+        // The first request gets the generous timeout (a client may connect and be
+        // slow to speak); once served, the connection is only worth holding while
+        // the client is actively using it.
+        let timeout = if first { IO_TIMEOUT } else { idle };
+        first = false;
+        let request = match conn.read_request(&stop, timeout) {
             Ok(request) => request,
-            // EOF or an idle timeout: the normal way a connection ends. There is
-            // nobody left to answer, so nothing is reported.
-            Err(_) => return Ok(()),
+            // EOF, an idle timeout, or the socket being shut down by stop(): the
+            // normal ways a connection ends. There is nobody left to answer.
+            Err(ReadFault::Closed) => return Ok(()),
+            Err(ReadFault::Protocol(status, reason, message)) => {
+                let _ = write_plain(&mut conn.stream, status, reason, message, false);
+                return Ok(());
+            }
         };
         if !handle_one(&mut conn, request, &handler)? {
             return Ok(());
         }
-        // The first request gets the generous timeout (a client that connected
-        // but is slow to speak); once served, the connection is only worth
-        // holding while the client is actively using it.
-        conn.set_read_timeout(idle);
     }
 }
 
@@ -398,8 +566,42 @@ fn handle_one<H: Handler + Send + 'static>(
         return Ok(false);
     }
 
+    // A browser can POST here without a preflight when the content type is not
+    // JSON. Loopback is not an authorization boundary on a shared machine, so
+    // anything with a foreign Origin is refused, and a non-JSON body is refused
+    // before it reaches the tool layer.
+    if !request.origin.is_empty() && !is_loopback_origin(&request.origin) {
+        let _ = write_plain(stream, 403, "Forbidden", "origin not allowed", false);
+        return Ok(false);
+    }
+    if !request.content_type.is_empty() && !request.content_type.contains("application/json") {
+        let _ = write_plain(
+            stream,
+            415,
+            "Unsupported Media Type",
+            "expected application/json",
+            false,
+        );
+        return Ok(false);
+    }
+
+    // Match on the path alone: clients add query strings (inspectors, tracing) and
+    // some send absolute-form targets when an HTTP proxy is configured.
+    let path = request
+        .path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/');
+    let path = if path.is_empty() { "/" } else { path };
+    let path = path
+        .strip_prefix("http://")
+        .or_else(|| path.strip_prefix("https://"))
+        .and_then(|rest| rest.find('/').map(|at| &rest[at..]))
+        .unwrap_or(path);
+
     // MCP endpoint sits at "/" and "/mcp"; everything else is a 404.
-    if request.path != "/" && request.path != "/mcp" {
+    if path != "/" && path != "/mcp" {
         let _ = write_plain(stream, 404, "Not Found", "not found", false);
         return Ok(false);
     }

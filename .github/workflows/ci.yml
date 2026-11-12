@@ -49,7 +49,10 @@ jobs:
           $exe = "target\release\everything-search-mcp.exe"
 
           $v = & $exe --version
-          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "bad --version output: $v" }
+          # Prerelease suffixes are legitimate (0.3.11-dev.1 while the plugin work
+          # is unreleased), and they contain extra dots, so the pattern has to
+          # allow the whole semver tail rather than three numeric fields.
+          if ($v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "bad --version output: $v" }
 
           $cfg = & $exe config --target json --no-check --json | ConvertFrom-Json
           if ($cfg.targets[0].snippet -notmatch 'mcpServers') { throw "config emitted no mcpServers block" }

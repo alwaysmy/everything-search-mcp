@@ -99,9 +99,15 @@ struct Opts {
 }
 
 pub fn dispatch(rest: &[String]) -> i32 {
-    let mut opts = Opts { name: DEFAULT_NAME.to_string(), check: true, ..Opts::default() };
+    let mut opts = Opts {
+        name: DEFAULT_NAME.to_string(),
+        check: true,
+        ..Opts::default()
+    };
     let need = |i: usize, flag: &str| -> Result<String, String> {
-        rest.get(i + 1).cloned().ok_or_else(|| format!("{flag} needs a value"))
+        rest.get(i + 1)
+            .cloned()
+            .ok_or_else(|| format!("{flag} needs a value"))
     };
     let mut i = 0;
     while i < rest.len() {
@@ -229,7 +235,9 @@ fn all_targets() -> Vec<Target> {
         Target {
             id: "claude-desktop",
             label: "Claude Desktop",
-            file: appdata.as_ref().map(|a| a.join("Claude").join("claude_desktop_config.json")),
+            file: appdata
+                .as_ref()
+                .map(|a| a.join("Claude").join("claude_desktop_config.json")),
             kind: Kind::JsonPlain,
             note: "quit Claude Desktop from the tray and start it again",
         },
@@ -257,7 +265,9 @@ fn all_targets() -> Vec<Target> {
         Target {
             id: "vscode",
             label: "VS Code",
-            file: appdata.as_ref().map(|a| a.join("Code").join("User").join("mcp.json")),
+            file: appdata
+                .as_ref()
+                .map(|a| a.join("Code").join("User").join("mcp.json")),
             kind: Kind::VsCode,
             note: "run 'Developer: Reload Window'",
         },
@@ -296,15 +306,23 @@ fn infer_kind(file: &Path) -> Kind {
 
 fn select<'a>(all: &'a [Target], opts: &Opts) -> Result<Vec<&'a Target>, String> {
     if opts.targets.is_empty() {
-        let existing: Vec<&Target> =
-            all.iter().filter(|t| t.file.as_ref().is_some_and(|f| f.exists())).collect();
-        return Ok(if existing.is_empty() { all.iter().collect() } else { existing });
+        let existing: Vec<&Target> = all
+            .iter()
+            .filter(|t| t.file.as_ref().is_some_and(|f| f.exists()))
+            .collect();
+        return Ok(if existing.is_empty() {
+            all.iter().collect()
+        } else {
+            existing
+        });
     }
     let mut out: Vec<&Target> = Vec::new();
     for want in &opts.targets {
         let exact: Vec<&Target> = all.iter().filter(|t| t.id == want.as_str()).collect();
         let hits: Vec<&Target> = if exact.is_empty() {
-            all.iter().filter(|t| t.id.starts_with(want.as_str())).collect()
+            all.iter()
+                .filter(|t| t.id.starts_with(want.as_str()))
+                .collect()
         } else {
             exact
         };
@@ -389,7 +407,12 @@ fn run(opts: &Opts, exe: &str) -> i32 {
                 Report::Failed(e)
             }
         };
-        rows.push(Row { target: t, file, report, snippet });
+        rows.push(Row {
+            target: t,
+            file,
+            report,
+            snippet,
+        });
     }
 
     if opts.json {
@@ -578,8 +601,12 @@ fn remove(t: &Target, file: &Path, name: &str) -> Result<Report, String> {
         Kind::Stdout => return Err("this target has no config file".into()),
         _ => {
             let (bom, body) = split_bom(&old);
-            let mut root: Value = serde_json::from_str(body)
-                .map_err(|e| format!("{} is not valid JSON, leaving it alone: {e}", file.display()))?;
+            let mut root: Value = serde_json::from_str(body).map_err(|e| {
+                format!(
+                    "{} is not valid JSON, leaving it alone: {e}",
+                    file.display()
+                )
+            })?;
             let present = root
                 .get_mut(container)
                 .and_then(|c| c.as_object_mut())
@@ -628,7 +655,9 @@ fn splice(lines: &[&str], start: usize, end: usize, insert: Option<&str>) -> Str
 /// entry is left alone.
 fn dsh_range(lines: &[&str], name: &str) -> Option<(usize, usize)> {
     let own = [format!("- id: mcp-{name}"), format!("- id: {name}")];
-    let start = lines.iter().position(|l| own.iter().any(|o| o.as_str() == l.trim()))?;
+    let start = lines
+        .iter()
+        .position(|l| own.iter().any(|o| o.as_str() == l.trim()))?;
     let indent = lines[start].len() - lines[start].trim_start().len();
     let mut cut = start + 1;
     let mut scan = start + 1;
@@ -650,7 +679,9 @@ fn dsh_range(lines: &[&str], name: &str) -> Option<(usize, usize)> {
 fn codex_range(lines: &[&str], name: &str) -> Option<(usize, usize)> {
     let head = format!("[mcp_servers.{name}]");
     let env_head = format!("[mcp_servers.{name}.env]");
-    let start = lines.iter().position(|l| l.trim() == head || l.trim() == env_head)?;
+    let start = lines
+        .iter()
+        .position(|l| l.trim() == head || l.trim() == env_head)?;
     let mut end = start + 1;
     while end < lines.len() {
         let t = lines[end].trim();
@@ -699,7 +730,11 @@ fn write_if_changed(file: &Path, new: &str) -> Result<Report, String> {
     let existed = file.exists();
     let backup = if existed { Some(backup(file)?) } else { None };
     write_file(file, new)?;
-    Ok(if existed { Report::Updated(backup) } else { Report::Created })
+    Ok(if existed {
+        Report::Updated(backup)
+    } else {
+        Report::Created
+    })
 }
 
 fn write_file(file: &Path, text: &str) -> Result<(), String> {
@@ -725,7 +760,10 @@ fn backup(file: &Path) -> Result<PathBuf, String> {
         dest = file.with_file_name(name);
         n += 1;
         if n > 999 {
-            return Err(format!("cannot find a free backup name for {}", file.display()));
+            return Err(format!(
+                "cannot find a free backup name for {}",
+                file.display()
+            ));
         }
     }
     fs::copy(file, &dest).map_err(|e| format!("cannot back up {}: {e}", file.display()))?;
@@ -769,8 +807,12 @@ fn apply_json(
     let mut root: Value = if body.trim().is_empty() {
         json!({})
     } else {
-        serde_json::from_str(body)
-            .map_err(|e| format!("{} is not valid JSON, leaving it alone: {e}", file.display()))?
+        serde_json::from_str(body).map_err(|e| {
+            format!(
+                "{} is not valid JSON, leaving it alone: {e}",
+                file.display()
+            )
+        })?
     };
     let entry = entry_json(kind, exe, env);
     if existed && root.get(container).and_then(|c| c.get(name)) == Some(&entry) {
@@ -795,7 +837,11 @@ fn apply_json(
     );
     let backup = if existed { Some(backup(file)?) } else { None };
     write_file(file, &text)?;
-    Ok(if existed { Report::Updated(backup) } else { Report::Created })
+    Ok(if existed {
+        Report::Updated(backup)
+    } else {
+        Report::Created
+    })
 }
 
 /// Replace the loader entry for this server in place, or append a new
@@ -839,7 +885,11 @@ fn codex_replacement(
     let block = codex_block(exe, name, env);
     if let Some((start, end)) = codex_range(&lines, name) {
         // Keep one blank line between the replaced table and whatever follows it.
-        let insert = if end < lines.len() { format!("{block}\n") } else { block };
+        let insert = if end < lines.len() {
+            format!("{block}\n")
+        } else {
+            block
+        };
         return Ok(splice(&lines, start, end, Some(&insert)));
     }
     let mut out = text;
@@ -856,7 +906,10 @@ fn codex_replacement(
 // ------------------------------------------------------------------- reports
 
 fn indent_block(s: &str, pad: &str) -> String {
-    s.lines().map(|l| format!("{pad}{l}")).collect::<Vec<_>>().join("\n")
+    s.lines()
+        .map(|l| format!("{pad}{l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn print_prose(
@@ -872,7 +925,10 @@ fn print_prose(
     match ready {
         Some(Ok(n)) => println!("  Everything  reachable, {n} objects indexed"),
         Some(Err(e)) => {
-            println!("  Everything  NOT reachable - {}", e.lines().next().unwrap_or(""))
+            println!(
+                "  Everything  NOT reachable - {}",
+                e.lines().next().unwrap_or("")
+            )
         }
         None => {}
     }
@@ -894,7 +950,11 @@ fn print_prose(
             println!(
                 "  file     {}{}",
                 f.display(),
-                if f.exists() { "" } else { "   (does not exist yet)" }
+                if f.exists() {
+                    ""
+                } else {
+                    "   (does not exist yet)"
+                }
             );
         }
         println!("  action   {}", row.report.verb());

@@ -39,9 +39,20 @@ pub fn resolve_sort(sort: &str) -> (&'static str, bool) {
 }
 
 pub const SORT_NAMES: &[&str] = &[
-    "name", "name-desc", "path", "path-desc", "size", "size-asc", "size-desc",
-    "date-modified", "date-modified-asc", "date-modified-desc",
-    "date-created", "date-created-asc", "date-created-desc", "extension",
+    "name",
+    "name-desc",
+    "path",
+    "path-desc",
+    "size",
+    "size-asc",
+    "size-desc",
+    "date-modified",
+    "date-modified-asc",
+    "date-modified-desc",
+    "date-created",
+    "date-created-asc",
+    "date-created-desc",
+    "extension",
 ];
 
 /// Category table: the single source of truth for the `category` parameter, the
@@ -49,8 +60,14 @@ pub const SORT_NAMES: &[&str] = &[
 /// vocabulary, so a `kind` can be fed straight back into `category`).
 pub const FILE_TYPES: &[(&str, &str)] = &[
     ("audio", "ext:mp3;wav;flac;aac;ogg;wma;m4a;opus;aiff;alac"),
-    ("video", "ext:mp4;avi;mkv;mov;wmv;flv;webm;m4v;mpeg;mpg;3gp;ts"),
-    ("image", "ext:jpg;jpeg;png;gif;bmp;svg;webp;tiff;tif;ico;raw;heic;heif;avif;psd"),
+    (
+        "video",
+        "ext:mp4;avi;mkv;mov;wmv;flv;webm;m4v;mpeg;mpg;3gp;ts",
+    ),
+    (
+        "image",
+        "ext:jpg;jpeg;png;gif;bmp;svg;webp;tiff;tif;ico;raw;heic;heif;avif;psd",
+    ),
     (
         "document",
         "ext:pdf;doc;docx;xls;xlsx;ppt;pptx;odt;ods;odp;rtf;txt;md;epub;pages;numbers;key",
@@ -62,10 +79,16 @@ pub const FILE_TYPES: &[(&str, &str)] = &[
          fs;clj;lisp;asm;toml;yaml;yml;json;xml;ini;cfg;conf;env;dockerfile;makefile;cmake;\
          gradle;sbt;proto;graphql;tf;hcl",
     ),
-    ("archive", "ext:zip;rar;7z;tar;gz;bz2;xz;tgz;zst;lz4;cab;iso;dmg"),
+    (
+        "archive",
+        "ext:zip;rar;7z;tar;gz;bz2;xz;tgz;zst;lz4;cab;iso;dmg",
+    ),
     ("executable", "ext:exe;msi;dll;sys;com;scr;appx;msix"),
     ("font", "ext:ttf;otf;woff;woff2;eot;fon"),
-    ("3d", "ext:obj;fbx;stl;blend;dae;3ds;gltf;glb;usd;usda;usdz;step;iges"),
+    (
+        "3d",
+        "ext:obj;fbx;stl;blend;dae;3ds;gltf;glb;usd;usda;usdz;step;iges",
+    ),
     (
         "data",
         "ext:csv;tsv;json;jsonl;ndjson;xml;sqlite;db;mdb;accdb;parquet;arrow;avro;hdf5;feather",
@@ -117,8 +140,25 @@ pub fn period_query(period: &str) -> Option<&'static str> {
 }
 
 pub const PERIOD_NAMES: &[&str] = &[
-    "1min", "5min", "10min", "15min", "30min", "1hour", "2hours", "6hours", "12hours", "today",
-    "yesterday", "1day", "3days", "1week", "2weeks", "1month", "3months", "6months", "1year",
+    "1min",
+    "5min",
+    "10min",
+    "15min",
+    "30min",
+    "1hour",
+    "2hours",
+    "6hours",
+    "12hours",
+    "today",
+    "yesterday",
+    "1day",
+    "3days",
+    "1week",
+    "2weeks",
+    "1month",
+    "3months",
+    "6months",
+    "1year",
 ];
 
 /// Translate the numeric spellings Everything itself understands.
@@ -146,7 +186,11 @@ pub fn numeric_period(period: &str) -> Option<String> {
         return None; // `last0days` is accepted by Everything and means nothing
     }
     // Everything spells the singular without the trailing s: last1day, last1hour.
-    let unit = if n == 1 { unit.trim_end_matches('s') } else { unit };
+    let unit = if n == 1 {
+        unit.trim_end_matches('s')
+    } else {
+        unit
+    };
     Some(format!("dm:last{n}{unit}"))
 }
 
@@ -541,14 +585,13 @@ pub fn parse_url(raw: &str) -> Result<(String, u16, Option<(String, String)>), S
             host
         ));
     }
-    let port = match port {
-        None | Some("") => DEFAULT_PORT,
-        Some(p) => p
-            .parse::<u16>()
-            .ok()
-            .filter(|p| *p > 0)
-            .ok_or_else(|| format!("'{p}' in '{raw}' is not a port number (expected 1-65535)"))?,
-    };
+    let port =
+        match port {
+            None | Some("") => DEFAULT_PORT,
+            Some(p) => p.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| {
+                format!("'{p}' in '{raw}' is not a port number (expected 1-65535)")
+            })?,
+        };
     Ok((host, port, auth))
 }
 
@@ -582,11 +625,17 @@ pub fn query_all(backends: &[Backend], q: &Query) -> Vec<BackendOutcome> {
     if backends.len() <= 1 {
         return backends
             .iter()
-            .map(|b| BackendOutcome { backend: b.clone(), result: run(b) })
+            .map(|b| BackendOutcome {
+                backend: b.clone(),
+                result: run(b),
+            })
             .collect();
     }
     std::thread::scope(|scope| {
-        let handles: Vec<_> = backends.iter().map(|b| scope.spawn(move || run(b))).collect();
+        let handles: Vec<_> = backends
+            .iter()
+            .map(|b| scope.spawn(move || run(b)))
+            .collect();
         handles
             .into_iter()
             .zip(backends)
@@ -616,8 +665,16 @@ fn base64(s: &str) -> String {
             | *c.get(2).unwrap_or(&0) as u32;
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -692,7 +749,11 @@ impl Client {
         let (sort, asc) = resolve_sort(q.sort);
         url.push_str("&sort=");
         url.push_str(&encode(sort));
-        url.push_str(if q.ascending && asc { "&ascending=1" } else { "&ascending=0" });
+        url.push_str(if q.ascending && asc {
+            "&ascending=1"
+        } else {
+            "&ascending=0"
+        });
         if q.case {
             url.push_str("&case=1");
         }
@@ -763,7 +824,11 @@ mod tests {
         // If that changed any rendering, this catches it: the hoisted value and a
         // freshly read one are the same offset, so every row must agree.
         let tz = local_offset_minutes();
-        for raw in ["134336760370000000", "116444736000000000", "133000000000000000"] {
+        for raw in [
+            "134336760370000000",
+            "116444736000000000",
+            "133000000000000000",
+        ] {
             assert_eq!(
                 format_filetime(raw, tz),
                 format_filetime(raw, local_offset_minutes()),
@@ -775,7 +840,10 @@ mod tests {
     #[test]
     fn local_offset_is_a_plausible_timezone() {
         let m = local_offset_minutes();
-        assert!((-720..=840).contains(&m), "offset {m} minutes is not a real timezone");
+        assert!(
+            (-720..=840).contains(&m),
+            "offset {m} minutes is not a real timezone"
+        );
         assert_eq!(m % 15, 0, "offsets are always a multiple of 15 minutes");
     }
 
@@ -836,13 +904,17 @@ mod tests {
     }
 
     #[test]
-    fn every_period_carries_its_dm_prefix() {        // Everything has no bare `last1week`: as a term it matches nothing (0
+    fn every_period_carries_its_dm_prefix() {
+        // Everything has no bare `last1week`: as a term it matches nothing (0
         // results, versus 497,396 for `dm:last1week`). A period value without the
         // prefix therefore turns every recent-file search into an empty result,
         // which the auto-expand fallback then quietly answers from all time.
         for p in PERIOD_NAMES {
             let q = period_query(p).expect("every listed period must resolve");
-            assert!(q.starts_with("dm:"), "period '{p}' resolved to '{q}' without dm:");
+            assert!(
+                q.starts_with("dm:"),
+                "period '{p}' resolved to '{q}' without dm:"
+            );
         }
         assert_eq!(period_query("1week"), Some("dm:last1week"));
         assert_eq!(period_query("today"), Some("dm:today"));
@@ -876,7 +948,10 @@ mod tests {
         // answer a question about another machine with this machine's files.
         assert!(parse_url("").is_err());
         assert!(parse_url("http://").is_err());
-        assert!(parse_url("https://10.0.0.2:23333").is_err(), "no TLS on that server");
+        assert!(
+            parse_url("https://10.0.0.2:23333").is_err(),
+            "no TLS on that server"
+        );
         assert!(parse_url("10.0.0.2:notaport").is_err());
         assert!(parse_url("10.0.0.2:0").is_err());
         assert!(parse_url("10.0.0.2:99999").is_err());

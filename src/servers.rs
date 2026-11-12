@@ -58,7 +58,9 @@ pub fn path() -> Result<PathBuf, String> {
              Set {ENV_FILE} to choose one explicitly."
         )
     })?;
-    Ok(PathBuf::from(base).join("everything-search-mcp").join("servers.json"))
+    Ok(PathBuf::from(base)
+        .join("everything-search-mcp")
+        .join("servers.json"))
 }
 
 /// The address of the local instance, which is what the registry cannot tell us
@@ -82,7 +84,12 @@ impl Registry {
         let text = match std::fs::read_to_string(&p) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(e) => return Err(format!("cannot read the server registry at {}: {e}", p.display())),
+            Err(e) => {
+                return Err(format!(
+                    "cannot read the server registry at {}: {e}",
+                    p.display()
+                ))
+            }
         };
         // Strip a BOM: an editor that saves as UTF-8-with-BOM is common on Windows,
         // and serde rejects the leading character.
@@ -120,11 +127,15 @@ impl Registry {
     }
 
     pub fn get(&self, name: &str) -> Option<&Entry> {
-        self.servers.iter().find(|s| s.name.eq_ignore_ascii_case(name))
+        self.servers
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut Entry> {
-        self.servers.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name))
+        self.servers
+            .iter_mut()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     /// Add or replace one entry. Replacing keeps the previous switch state unless
@@ -209,7 +220,10 @@ pub fn validate_name(name: &str) -> Result<(), String> {
              pass the address as the url instead."
         ));
     }
-    if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+    if !n
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
         return Err(format!(
             "'{n}' contains characters that are not allowed in a name. Use letters, \
              digits, '-', '_' or '.'."
@@ -226,7 +240,11 @@ mod tests {
         Registry {
             servers: entries
                 .iter()
-                .map(|(n, u, e)| Entry { name: n.to_string(), url: u.to_string(), enabled: *e })
+                .map(|(n, u, e)| Entry {
+                    name: n.to_string(),
+                    url: u.to_string(),
+                    enabled: *e,
+                })
                 .collect(),
         }
     }
@@ -255,7 +273,10 @@ mod tests {
     #[test]
     fn a_registered_local_can_be_switched_off_and_overrides_the_address() {
         let r = reg(&[(LOCAL, "http://127.0.0.1:9999", false)]);
-        assert!(r.enabled_targets().is_empty(), "switched-off local must not be implicit");
+        assert!(
+            r.enabled_targets().is_empty(),
+            "switched-off local must not be implicit"
+        );
         let r = reg(&[(LOCAL, "http://127.0.0.1:9999", true)]);
         let t = r.enabled_targets();
         assert_eq!(t.len(), 1);

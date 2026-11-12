@@ -43,8 +43,18 @@ fn read_response(stream: &mut TcpStream) -> (u16, String, String) {
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos;
         }
-        let n = stream.read(&mut chunk).expect("read response head");
-        assert!(n > 0, "eof before response head finished");
+        let n = match stream.read(&mut chunk) {
+            Ok(n) => n,
+            Err(error) => panic!(
+                "read response head: {error}; got so far: {:?}",
+                String::from_utf8_lossy(&buf)
+            ),
+        };
+        assert!(
+            n > 0,
+            "eof before response head finished; got so far: {:?}",
+            String::from_utf8_lossy(&buf)
+        );
         buf.extend_from_slice(&chunk[..n]);
     };
     let head = String::from_utf8_lossy(&buf[..head_end]).to_string();

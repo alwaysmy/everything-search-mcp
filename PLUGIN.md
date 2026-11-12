@@ -65,6 +65,11 @@ Register it as an HTTP MCP server:
 Clients post to `/` or `/mcp`. The endpoint is stateless (no session id, no SSE
 stream), so `GET` returns `405` on purpose — that is legal for a tool-only server.
 
+Connections are kept alive: a client that reuses one socket skips the per-call
+handshake, which was the single largest piece of this endpoint's overhead
+(~0.47 ms of a ~0.62 ms console round trip). `Connection: close` is honored, and
+HTTP/1.0 defaults to closing, both per spec.
+
 ## Verify by hand
 
 ```powershell

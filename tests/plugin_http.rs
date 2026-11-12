@@ -35,6 +35,43 @@ fn http_post(port: u16, body: &str) -> (u16, String) {
     (status, body)
 }
 
+/// Read exactly one HTTP response, leaving the socket usable for the next one.
+fn read_response(stream: &mut TcpStream) -> (u16, String, String) {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let head_end = loop {
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos;
+        }
+        let n = stream.read(&mut chunk).expect("read response head");
+        assert!(n > 0, "eof before response head finished");
+        buf.extend_from_slice(&chunk[..n]);
+    };
+    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    let length: usize = head
+        .lines()
+        .find_map(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower
+                .strip_prefix("content-length:")
+                .and_then(|value| value.trim().parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+    let mut body = buf[head_end + 4..].to_vec();
+    while body.len() < length {
+        let n = stream.read(&mut chunk).expect("read response body");
+        assert!(n > 0, "eof before response body finished");
+        body.extend_from_slice(&chunk[..n]);
+    }
+    body.truncate(length);
+    (status, head, String::from_utf8_lossy(&body).to_string())
+}
+
 fn rpc(port: u16, payload: Value) -> Value {
     let (status, body) = http_post(port, &payload.to_string());
     assert_eq!(status, 200, "unexpected status for {payload}: {body}");
@@ -89,6 +126,71 @@ fn mcp_handshake_and_tool_list_over_loopback_http() {
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
     );
     assert_eq!(status, 202, "notification should be 202, body {body}");
+
+    endpoint.stop();
+}
+
+/// Keep-alive: two calls on one socket, then a pipelined pair in a single write.
+/// Without the leftover-buffer handling the second half of a pipelined pair is
+/// silently dropped, which looks like a hung client rather than a lost request.
+#[test]
+fn reuses_a_connection_for_several_requests() {
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    for id in 1..=2 {
+        let reply = request.replace("\"id\":1", &format!("\"id\":{id}"));
+        stream.write_all(reply.as_bytes()).expect("write request");
+        let (status, head, response) = read_response(&mut stream);
+        assert_eq!(status, 200, "request {id}: {response}");
+        assert!(
+            head.to_ascii_lowercase().contains("connection: keep-alive"),
+            "server did not offer keep-alive: {head}"
+        );
+        let parsed: Value = serde_json::from_str(&response).expect("json response");
+        assert_eq!(parsed["id"], json!(id));
+    }
+
+    // Pipelined: both requests leave in one write, both must be answered.
+    let first = request.replace("\"id\":1", "\"id\":7");
+    let second = request.replace("\"id\":1", "\"id\":8");
+    stream
+        .write_all(format!("{first}{second}").as_bytes())
+        .expect("write pipelined pair");
+    for id in 7..=8 {
+        let (status, _, response) = read_response(&mut stream);
+        assert_eq!(status, 200, "pipelined {id}: {response}");
+        let parsed: Value = serde_json::from_str(&response).expect("json response");
+        assert_eq!(parsed["id"], json!(id));
+    }
+
+    // And `Connection: close` must actually end the connection.
+    let closing = request.replace("\"id\":1", "\"id\":9").replace(
+        "Accept: application/json",
+        "Accept: application/json\r\nConnection: close",
+    );
+    stream
+        .write_all(closing.as_bytes())
+        .expect("write closing request");
+    let (status, head, _) = read_response(&mut stream);
+    assert_eq!(status, 200);
+    assert!(
+        head.to_ascii_lowercase().contains("connection: close"),
+        "closing request did not get a close: {head}"
+    );
+    let mut tail = [0u8; 1];
+    assert_eq!(
+        stream.read(&mut tail).unwrap_or(0),
+        0,
+        "socket stayed open after Connection: close"
+    );
 
     endpoint.stop();
 }

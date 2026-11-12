@@ -19,6 +19,18 @@ mcp__everything-search__everything_search_batch
 
 ## Install
 
+There are two things you can install, and you probably want one of them:
+
+| Archive | What is inside | When |
+|---|---|---|
+| `everything-search-skill-<v>.zip` | `everything-search-mcp.exe` + `SKILL.md` + `INSTALL.md` | the normal case: a client spawns the executable over stdio |
+| `everything-search-plugin-<v>.zip` | `everything_search_mcp64.dll` + `install-plugin.ps1` + `PLUGIN.md` | you want the endpoint to live inside Everything itself |
+
+Both are produced by `.\release.ps1`, which builds and packs them into `dist\`.
+The plugin archive ships the DLL prebuilt on purpose: everything it needs is
+described on this page, but the one thing a user cannot be expected to do is
+install a Rust toolchain to run a file search plugin.
+
 **1. Get the binary.** Download `everything-search-mcp.exe` from
 [Releases](https://github.com/alwaysmy/everything-search-mcp/releases), or grab
 `everything-search-skill.zip`, which is the binary plus the agent-facing skill
@@ -63,6 +75,11 @@ and the stdio executable remains the right choice for clients that only speak
 stdio, for one-shot CLI use, and as a fallback when the plugin is not installed.
 
 ### Install
+
+From a checkout, or from the `everything-search-plugin-<v>.zip` archive (it has no
+`Cargo.toml`, so the installer uses the DLL sitting next to it instead of trying
+to build). `PLUGIN.md` in the same folder is the long form: requirements,
+registration table, uninstall, port changes, troubleshooting.
 
 ```powershell
 .\install-plugin.ps1                    # build, install, restart Everything, verify

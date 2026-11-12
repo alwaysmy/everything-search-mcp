@@ -235,7 +235,26 @@ MCP 侧验证：重启客户端后调用 `everything_search`，`query` 填 `*.py
 | 远程命中却在本机读不到文件 | 路径属于那台机器，本机没有。详见 SKILL.md「搜别的机器」 |
 | 多机结果里的 `total` | 是各机精确计数之和；某台连不上时汇总行会写 `N index(es) unreachable`，那行不能忽略 |
 
-## 6. 卸载
+## 6. 可选：插件模式（MCP 直接挂在 Everything 进程里）
+
+stdio 模式每次调用都要拉起一个 exe 进程：多几毫秒启动开销、多一份进程内存，重启后还要客户端自己重连。插件模式把同一套工具装进 Everything 自己的进程，在里面监听 `127.0.0.1:8286`，客户端改成 HTTP 形态：
+
+```json
+{ "mcpServers": { "everything-search": { "url": "http://127.0.0.1:8286/" } } }
+```
+
+装（需要管理员；Everything 只在启动时加载插件，所以会重启一次，窗口不会抢前台）：
+
+```powershell
+.\install-plugin.ps1                 # 从仓库构建并安装
+.\install-plugin.ps1 -NoBuild        # 用包里自带的 DLL（发布包解压后的形态）
+```
+
+发布包里对应的是 `everything-search-plugin-<v>.zip`，里面有 `everything_search_mcp64.dll`、`install-plugin.ps1` 和 `PLUGIN.md`。插件是未签名的，Everything 对未列入白名单的 DLL **会静默拒绝加载且不写日志**——`install-plugin.ps1` 会写 `HKLM\...\AllowedPlugins`（分号分隔，逗号会让整份名单失效），这一步不能省。
+
+细节：端口怎么改、怎么卸干净、加载失败的排查表，见发布包里的 `PLUGIN.md`。
+
+## 7. 卸载
 
 ```powershell
 # 1) 从各客户端配置里删掉 everything 条目（本工具不提供自动删除，避免误删）

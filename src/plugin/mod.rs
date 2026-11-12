@@ -81,6 +81,23 @@ const HANDLED: *mut c_void = 1 as *mut c_void;
 
 static ENDPOINT: OnceLock<Mutex<Option<Endpoint<Tools>>>> = OnceLock::new();
 
+/// Whether the host process is Everything's service instance.
+///
+/// The Windows service runs `Everything64.exe -svc`; the interactive instance runs
+/// `-startup`. Both load the same plugin list, but only the interactive one may own
+/// the endpoint: a second bind fails with `WSAEADDRINUSE` (10048) and pops a dialog
+/// on the desktop.
+fn started_as_service<I>(args: I) -> bool
+where
+    I: IntoIterator,
+    I::Item: AsRef<std::ffi::OsStr>,
+{
+    args.into_iter().any(|arg| {
+        let text = arg.as_ref().to_string_lossy().to_ascii_lowercase();
+        text == "-svc" || text == "/svc"
+    })
+}
+
 fn endpoint_slot() -> &'static Mutex<Option<Endpoint<Tools>>> {
     ENDPOINT.get_or_init(|| Mutex::new(None))
 }
@@ -169,6 +186,14 @@ pub unsafe extern "system" fn everything_plugin_proc(msg: u32, data: *mut c_void
         PM_GET_LINK => PLUGIN_LINK.as_ptr() as *mut c_void,
 
         PM_START => {
+            // Everything's service instance (`-svc`, parent services.exe) loads the
+            // same plugins as the interactive one. It has no user session, and the
+            // second bind of the endpoint port surfaces as a "绑定失败 10048" dialog
+            // on the desktop — so the service instance deliberately serves nothing.
+            if started_as_service(std::env::args_os()) {
+                log("PM_START ignored: this is the service instance");
+                return HANDLED;
+            }
             let port = std::env::var("EVERYTHING_MCP_PORT")
                 .ok()
                 .and_then(|value| value.parse::<u16>().ok())
@@ -222,5 +247,18 @@ fn log(line: &str) {
         .open(dir.join("plugin.log"))
     {
         let _ = file.write_all(text.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::started_as_service;
+
+    #[test]
+    fn detects_the_service_instance() {
+        assert!(started_as_service(["Everything64.exe", "-startup", "-svc"]));
+        assert!(started_as_service(["/SVC"]));
+        assert!(!started_as_service(["Everything64.exe", "-startup"]));
+        assert!(!started_as_service(Vec::<String>::new()));
     }
 }

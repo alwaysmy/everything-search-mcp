@@ -163,6 +163,17 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 > `'type' looks like a misspelling of 'entry_type'`。看到这段就直接改名字，不要绕路。
 
 
+## `path` 不存在时看 `warnings`
+
+如果 `path` 指向一个不存在的目录，Everything 会正常返回 `0 results` —— 和"这个目录真的没文件"完全一样。
+所以 0 命中时服务端会再查一次文件系统，并在结果里给出：
+
+```
+warning: path not found: D:\NoSuchDir
+```
+
+结构化字段里也有 `warnings: ["path not found: ..."]`。看到它，说明**范围写错了，不是目录空的**。
+（非 0 结果时不查盘，所以正常查询没有额外开销。）
 ## 看 `effective_query` 自查
 
 每个结果都会回传 **`effective_query`** —— 服务端实际执行的 Everything 表达式

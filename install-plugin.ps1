@@ -57,24 +57,36 @@ function Test-Elevated {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Everything 1.5 x64 installs as Everything64.exe; portable builds and 1.4 use
+# Everything.exe. Every lookup below tries both, because the installer normally
+# runs while the host is stopped - the one moment there is no process to ask.
+$ExeNames = @('Everything64.exe', 'Everything.exe')
+
+function Find-EverythingExe([string]$Directory) {
+    foreach ($name in $ExeNames) {
+        $candidate = Join-Path $Directory $name
+        if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
+    }
+    return $null
+}
+
 function Get-EverythingExe([string]$Hint) {
     if ($Hint) {
-        $candidate = if (Test-Path $Hint -PathType Container) {
-            Join-Path $Hint 'Everything.exe'
-        } else { $Hint }
-        if ($candidate -notmatch '\\Everything\.exe$') {
-            $candidate = Join-Path (Split-Path $candidate) 'Everything.exe'
+        if (Test-Path $Hint -PathType Container) {
+            $found = Find-EverythingExe $Hint
+            if ($found) { return $found }
+            throw "no Everything.exe or Everything64.exe in $Hint"
         }
-        if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
-        throw "no Everything.exe at $candidate"
+        if (Test-Path $Hint) { return (Resolve-Path $Hint).Path }
+        throw "no Everything executable at $Hint"
     }
     $running = Get-Process -Name Everything, Everything64 -ErrorAction SilentlyContinue |
         Where-Object { $_.Path } | Select-Object -First 1
     if ($running) { return $running.Path }
     foreach ($dir in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
         if (-not $dir) { continue }
-        $candidate = Join-Path $dir 'Everything\Everything.exe'
-        if (Test-Path $candidate) { return $candidate }
+        $found = Find-EverythingExe (Join-Path $dir 'Everything')
+        if ($found) { return $found }
     }
     # Portable/elsewhere installs: Everything's uninstall entry keeps the folder.
     foreach ($key in @(
@@ -83,8 +95,8 @@ function Get-EverythingExe([string]$Hint) {
         )) {
         $location = (Get-ItemProperty $key -ErrorAction SilentlyContinue).InstallLocation
         if ($location) {
-            $candidate = Join-Path $location 'Everything.exe'
-            if (Test-Path $candidate) { return $candidate }
+            $found = Find-EverythingExe $location
+            if ($found) { return $found }
         }
     }
     throw 'cannot find Everything.exe - pass -EverythingDir'

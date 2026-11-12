@@ -9,7 +9,7 @@
 # Run it after installing a build, on a machine with Everything + the plugin:
 #
 #   .\TEST_SCRIPTS\parallel-probe.ps1
-#   .\TEST_SCRIPTS\parallel-probe.ps1 -Port 8286 -SlowPath D:\WorkDesigns
+#   .\TEST_SCRIPTS\parallel-probe.ps1 -Port 8286 -SlowPath D:\Projects
 #
 # Exit code 0 = no head-of-line blocking detected. 1 = a slow call delayed a fast
 # one, which means something serialized the tool layer again.

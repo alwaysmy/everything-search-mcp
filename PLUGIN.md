@@ -129,7 +129,7 @@ reads the environment variable.
 Stop-Process -Name Everything
 
 # 2) drop the DLL
-Remove-Item "D:\MyPrograms\1_Tools\Everything\Plugins\everything_search_mcp64.dll"
+Remove-Item "$env:ProgramFiles\Everything\Plugins\everything_search_mcp64.dll"
 
 # 3) remove it from the load list, the per-plugin settings and the allowlist
 #    (plugin_filename / plugin_enabled must stay aligned; AllowedPlugins is

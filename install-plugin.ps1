@@ -37,7 +37,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $dllName = [System.IO.Path]::GetFileNameWithoutExtension($PluginName)
-$source = Join-Path $root 'target\release\everything_mcp_core.dll'
+# Two layouts, one script. In a checkout the module is a cargo artifact named
+# after the crate; in the release archive it sits next to this script under the
+# name Everything expects. The release build is what makes the archive possible,
+# so it is looked for first and the packaged copy second.
+$source = $null
+foreach ($candidate in @(
+        (Join-Path $root 'target\release\everything_mcp_core.dll'),
+        (Join-Path $root $PluginName)
+    )) {
+    if (Test-Path $candidate) { $source = $candidate; break }
+}
+if (-not $source) { $source = Join-Path $root 'target\release\everything_mcp_core.dll' }
 $regPath = 'HKLM:\SOFTWARE\voidtools\Everything'
 
 function Test-Elevated {
@@ -167,6 +178,13 @@ $ini = Join-Path $everythingDir 'Everything.ini'
 $pluginIni = Join-Path $everythingDir 'Plugins.ini'
 Write-Host "host    $exe"
 
+# The release archive has no Cargo.toml: there is nothing to build, and asking a
+# user who just unzipped a DLL to install Rust first would be absurd.
+if (-not $NoBuild -and -not (Test-Path (Join-Path $root 'Cargo.toml'))) {
+    Write-Host 'build   no Cargo.toml here - using the packaged DLL'
+    $NoBuild = $true
+}
+
 if (-not $NoBuild) {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         $candidates = @($env:CARGO_HOME, (Join-Path $env:USERPROFILE '.cargo')) |
@@ -179,7 +197,9 @@ if (-not $NoBuild) {
     try { cargo build --release } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with $LASTEXITCODE" }
 }
-if (-not (Test-Path $source)) { throw "no DLL at $source - run without -NoBuild first" }
+if (-not (Test-Path $source)) {
+    throw "no plugin DLL: looked in target\release\everything_mcp_core.dll and $PluginName next to this script"
+}
 
 # Everything rewrites Everything.ini when it exits, so the host goes down before
 # the ini is edited - otherwise the exit would put the old load list back.

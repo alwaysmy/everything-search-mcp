@@ -97,7 +97,9 @@ pub fn shared_handler() -> HandlerFactory<Tools> {
 
 /// Start (or restart) the MCP endpoint on `port`; `0` lets the OS choose.
 pub fn start_endpoint(port: u16) -> std::io::Result<u16> {
-    let mut slot = endpoint_slot().lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut slot = endpoint_slot()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     if let Some(running) = slot.as_ref() {
         return Ok(running.addr().port());
     }
@@ -109,7 +111,9 @@ pub fn start_endpoint(port: u16) -> std::io::Result<u16> {
 
 /// Stop the MCP endpoint, if one is running.
 pub fn stop_endpoint() {
-    let mut slot = endpoint_slot().lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut slot = endpoint_slot()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     if let Some(mut running) = slot.take() {
         running.stop();
     }

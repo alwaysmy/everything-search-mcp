@@ -17,8 +17,9 @@ fn main() {
     }
 
     // No arguments: an MCP session on stdin/stdout.
-    let client =
-        everything_mcp_core::everything::Client::new(everything_mcp_core::everything::Config::from_env());
+    let client = everything_mcp_core::everything::Client::new(
+        everything_mcp_core::everything::Config::from_env(),
+    );
     if let Err(e) =
         everything_mcp_core::jsonrpc::serve(everything_mcp_core::tools::Tools::new(client))
     {
@@ -26,4 +27,3 @@ fn main() {
         std::process::exit(1);
     }
 }
-

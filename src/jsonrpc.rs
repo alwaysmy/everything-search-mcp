@@ -28,7 +28,10 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     pub fn new(text: impl Into<String>, structured: Value) -> Self {
-        Self { text: text.into(), structured }
+        Self {
+            text: text.into(),
+            structured,
+        }
     }
 }
 
@@ -43,7 +46,10 @@ pub trait Handler {
 
 impl<H: Handler> Server<H> {
     pub fn new(handler: H) -> Self {
-        Self { handler, initialized: false }
+        Self {
+            handler,
+            initialized: false,
+        }
     }
 
     /// Handle one raw line. Returns `None` for notifications.
@@ -51,7 +57,11 @@ impl<H: Handler> Server<H> {
         let msg: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
-                return Some(error_response(Value::Null, -32700, &format!("parse error: {e}")))
+                return Some(error_response(
+                    Value::Null,
+                    -32700,
+                    &format!("parse error: {e}"),
+                ))
             }
         };
         let id = msg.get("id").cloned();

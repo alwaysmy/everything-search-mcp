@@ -18,8 +18,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::jsonrpc::Server;
-use crate::tools::Tools;
+use crate::jsonrpc::{Handler, Server};
 
 /// Builds one MCP server per request.
 ///
@@ -28,23 +27,29 @@ use crate::tools::Tools;
 /// head-of-line blocking: one slow `count_stats` would hold up every request that
 /// arrived beside it. A factory keeps concurrent calls independent, which is what
 /// Everything's own HTTP server already does one layer down.
-pub type HandlerFactory = Arc<dyn Fn() -> Server<Tools> + Send + Sync>;
+///
+/// Generic over the handler so `tests/plugin_http.rs` can prove that independence
+/// with a handler it controls, instead of inferring it from tool timings.
+pub type HandlerFactory<H> = Arc<dyn Fn() -> Server<H> + Send + Sync>;
 
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A running endpoint. Dropping it stops the listener thread.
-pub struct Endpoint {
+pub struct Endpoint<H: Handler + Send + 'static> {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// The handler type is only carried so callers stay typed end to end; the
+    /// listener thread owns the factory and never hands it back.
+    handler: std::marker::PhantomData<H>,
 }
 
-impl Endpoint {
+impl<H: Handler + Send + 'static> Endpoint<H> {
     /// Bind `127.0.0.1:port` and start accepting. Port `0` asks the OS for a free
     /// port; the chosen one is available from [`Endpoint::addr`].
-    pub fn start(port: u16, handler: HandlerFactory) -> std::io::Result<Self> {
+    pub fn start(port: u16, handler: HandlerFactory<H>) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -56,6 +61,7 @@ impl Endpoint {
             addr,
             stop,
             thread: Some(thread),
+            handler: std::marker::PhantomData,
         })
     }
 
@@ -75,13 +81,17 @@ impl Endpoint {
     }
 }
 
-impl Drop for Endpoint {
+impl<H: Handler + Send + 'static> Drop for Endpoint<H> {
     fn drop(&mut self) {
         self.stop();
     }
 }
 
-fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>, handler: HandlerFactory) {
+fn accept_loop<H: Handler + Send + 'static>(
+    listener: TcpListener,
+    stop: Arc<AtomicBool>,
+    handler: HandlerFactory<H>,
+) {
     loop {
         match listener.accept() {
             Ok((stream, _peer)) => {
@@ -196,7 +206,10 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn handle_connection(mut stream: TcpStream, handler: HandlerFactory) -> std::io::Result<()> {
+fn handle_connection<H: Handler + Send + 'static>(
+    mut stream: TcpStream,
+    handler: HandlerFactory<H>,
+) -> std::io::Result<()> {
     let request = match read_request(&mut stream) {
         Ok(request) => request,
         Err(_) => {

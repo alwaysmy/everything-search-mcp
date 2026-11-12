@@ -78,9 +78,9 @@ const DEFAULT_PORT: u16 = 8286;
 
 const HANDLED: *mut c_void = 1 as *mut c_void;
 
-static ENDPOINT: OnceLock<Mutex<Option<Endpoint>>> = OnceLock::new();
+static ENDPOINT: OnceLock<Mutex<Option<Endpoint<Tools>>>> = OnceLock::new();
 
-fn endpoint_slot() -> &'static Mutex<Option<Endpoint>> {
+fn endpoint_slot() -> &'static Mutex<Option<Endpoint<Tools>>> {
     ENDPOINT.get_or_init(|| Mutex::new(None))
 }
 
@@ -88,7 +88,7 @@ fn endpoint_slot() -> &'static Mutex<Option<Endpoint>> {
 /// normal HTTP backend. One server is built per request, so concurrent calls do
 /// not queue behind a slow one. Exposed so tests can drive the same wiring without
 /// the host.
-pub fn shared_handler() -> HandlerFactory {
+pub fn shared_handler() -> HandlerFactory<Tools> {
     Arc::new(|| {
         let client = Client::new(Config::from_env());
         Server::new(Tools::new(client))

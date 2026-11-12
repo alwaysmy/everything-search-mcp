@@ -83,10 +83,112 @@ fn mcp_handshake_and_tool_list_over_loopback_http() {
     endpoint.stop();
 }
 
-/// Regression guard for head-of-line blocking: the endpoint must build a server
-/// per request. A shared `Server` behind a mutex made a slow `count_stats` delay
-/// every request that arrived beside it, which Everything's own HTTP server
-/// (one layer down) never does.
+/// Regression guard for head-of-line blocking, as a barrier rather than a
+/// stopwatch: request A's handler refuses to return until request B's handler
+/// releases it. With one shared `Server` behind a mutex, B is never dispatched,
+/// A waits until its own timeout, and this test fails deterministically. No
+/// timing thresholds, so it cannot flake on a loaded machine.
+#[test]
+fn concurrent_requests_do_not_queue_behind_each_other() {
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use everything_mcp_core::jsonrpc::{Handler, Server, ToolOutput};
+    use everything_mcp_core::plugin::server::HandlerFactory;
+    // The trait's signatures name the crate's own serde_json, not the test's copy.
+    use everything_mcp_core::serde_json::{json as core_json, Value as CoreValue};
+
+    /// Blocks `block` until another connection runs `release`.
+    struct Barrier {
+        entered: Sender<()>,
+        release: Arc<Mutex<Sender<()>>>,
+        waiting: Arc<Mutex<Receiver<()>>>,
+    }
+
+    impl Handler for Barrier {
+        fn list_tools(&self) -> CoreValue {
+            core_json!([])
+        }
+
+        fn call_tool(&mut self, name: &str, _args: &CoreValue) -> Result<ToolOutput, String> {
+            match name {
+                "block" => {
+                    // Tell the test we are inside the handler, then wait for the
+                    // peer request. A serialized endpoint never gets to the peer.
+                    self.entered.send(()).ok();
+                    let channel = self.waiting.lock().unwrap();
+                    channel
+                        .recv_timeout(Duration::from_secs(10))
+                        .map_err(|_| "peer request never arrived: calls were serialized".to_string())?;
+                    Ok(ToolOutput::new("released", core_json!({"ok": true})))
+                }
+                "release" => {
+                    self.release.lock().unwrap().send(()).ok();
+                    Ok(ToolOutput::new("released the peer", core_json!({"ok": true})))
+                }
+                other => Err(format!("unknown tool {other}")),
+            }
+        }
+    }
+
+    let (entered, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release = Arc::new(Mutex::new(release_tx));
+    let waiting = Arc::new(Mutex::new(release_rx));
+
+    let factory: HandlerFactory<Barrier> = {
+        let release = Arc::clone(&release);
+        let waiting = Arc::clone(&waiting);
+        let entered = entered.clone();
+        Arc::new(move || {
+            Server::new(Barrier {
+                entered: entered.clone(),
+                release: Arc::clone(&release),
+                waiting: Arc::clone(&waiting),
+            })
+        })
+    };
+
+    let mut endpoint = Endpoint::start(0, factory).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let blocked = {
+        let body = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "block", "arguments": {}}
+        })
+        .to_string();
+        std::thread::spawn(move || http_post(port, &body))
+    };
+
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the blocking call never reached its handler");
+
+    let (status, body) = http_post(
+        port,
+        &json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "release", "arguments": {}}
+        })
+        .to_string(),
+    );
+    assert_eq!(status, 200, "release call failed: {body}");
+
+    let (status, body) = blocked.join().expect("blocking request panicked");
+    assert_eq!(status, 200, "blocked call failed: {body}");
+    let reply: Value = serde_json::from_str(&body).expect("blocked call returned non-JSON");
+    assert!(
+        reply["result"]["isError"] == json!(false),
+        "blocked call was not released by its peer: {reply}"
+    );
+
+    endpoint.stop();
+}
+
+/// Guards the "one server per request" shape itself, so a lock cannot come back
+/// unnoticed behind a still-parallel-looking API.
 #[test]
 fn every_request_builds_its_own_server() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -99,7 +201,7 @@ fn every_request_builds_its_own_server() {
 
     let built = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&built);
-    let factory: HandlerFactory = Arc::new(move || {
+    let factory: HandlerFactory<Tools> = Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
         Server::new(Tools::new(Client::new(Config::from_env())))
     });

@@ -39,6 +39,31 @@ Windows CI remains the next platform check. The mock server verifies emitted
 probe grouping/scoping and pagination contracts; it does not emulate Everything's
 search engine. OR/group syntax was checked against the official voidtools manual.
 
+## Concurrency: no head-of-line blocking
+
+The in-process endpoint used to take one global `Arc<Mutex<Server>>` per request,
+so tool calls were serialized. Measured on the live index: with a 730 ms
+`everything_count_stats` in flight, an `everything_search` that answers in 25 ms
+waited 829 ms. Everything's own HTTP server one layer down is fully parallel
+(1-2 ms for the same probe while a 259 ms regex search ran), so the lock was a
+regression introduced by hosting, not a property of the backend.
+
+`cargo test` now covers this twice, and neither check uses a stopwatch:
+
+- `concurrent_requests_do_not_queue_behind_each_other` is a barrier: request A's
+  handler blocks until request B's handler releases it. Reintroducing a shared
+  lock makes B unreachable, A times out, and the test fails in 10 s with
+  `peer request never arrived`. Verified by putting the lock back before keeping
+  the test: it failed, and passed again once removed.
+- `every_request_builds_its_own_server` counts handler constructions, so the
+  "one server per request" shape cannot be swapped for a lock that still looks
+  parallel from the outside.
+
+`TEST_SCRIPTS/parallel-probe.ps1` repeats the measurement against a live index
+(slow solo, fast solo, fast while slow) and fails if a concurrent fast call
+exceeds `max(150 ms, 5x solo)`. It is the release check, not CI: it needs Windows
+and a running Everything.
+
 Stdio dispatch is intentionally still synchronous and cannot process cancellation
 while a tool call runs. The deadline is per HTTP request, not an atomic snapshot
 or a whole multi-page tool deadline. Source labels, scope/accuracy fields, null

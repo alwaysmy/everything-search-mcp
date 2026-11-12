@@ -824,7 +824,11 @@ mod tests {
         // If that changed any rendering, this catches it: the hoisted value and a
         // freshly read one are the same offset, so every row must agree.
         let tz = local_offset_minutes();
-        for raw in ["134336760370000000", "116444736000000000", "133000000000000000"] {
+        for raw in [
+            "134336760370000000",
+            "116444736000000000",
+            "133000000000000000",
+        ] {
             assert_eq!(
                 format_filetime(raw, tz),
                 format_filetime(raw, local_offset_minutes()),

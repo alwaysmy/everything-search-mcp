@@ -1249,8 +1249,11 @@ impl Tools {
                 unknown_args_hint(args, SEARCH_ARGS)
             ));
         }
-        let max =
-            cap(self.client.config(), u(args, "max_results", DEFAULT_MAX_RESULTS)).min(budget.unwrap_or(usize::MAX));
+        let max = cap(
+            self.client.config(),
+            u(args, "max_results", DEFAULT_MAX_RESULTS),
+        )
+        .min(budget.unwrap_or(usize::MAX));
         let offset = u(args, "offset", 0);
         let sort = s_or(args, "sort", "date-modified-desc");
         everything::validate_sort(&sort)?;
@@ -1484,7 +1487,10 @@ impl Tools {
                 }
             },
         };
-        let max = cap(self.client.config(), u(args, "max_results", DEFAULT_MAX_RESULTS));
+        let max = cap(
+            self.client.config(),
+            u(args, "max_results", DEFAULT_MAX_RESULTS),
+        );
         let path = opt(args, "path");
         let extra = s(args, "query");
         let extensions = s(args, "extensions");

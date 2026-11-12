@@ -23,7 +23,7 @@ There are two things you can install, and you probably want one of them:
 
 | Archive | What is inside | When |
 |---|---|---|
-| `everything-search-skill-<v>.zip` | `everything-search-mcp.exe` + `SKILL.md` + `INSTALL.md` | the normal case: a client spawns the executable over stdio |
+| `everything-search-skill-<v>.zip` | `everything-search-mcp.exe` + `SKILL.md` + `REFERENCE.md` + `INSTALL.md` + `README.md` + `LICENSE` | the normal case: a client spawns the executable over stdio |
 | `everything-search-plugin-<v>.zip` | `everything_search_mcp64.dll` + `install-plugin.ps1` + `PLUGIN.md` | you want the endpoint to live inside Everything itself |
 
 Both are produced by `.\release.ps1`, which builds and packs them into `dist\`.
@@ -442,7 +442,7 @@ src/
   cli.rs        one-shot search/recent/count/details/servers, so the exe works with no MCP
   setup.rs      `config`: emit or apply the client configuration for this exe
 skills/
-  everything-search/   the agent-facing skill (SKILL.md + INSTALL.md)
+  everything-search/   the agent-facing skill (SKILL.md + REFERENCE.md + INSTALL.md)
 TEST_SCRIPTS/
   compare-single-backend.ps1   single-instance regression check against a git baseline
   mock-http-smoke.py            isolated CLI/MCP parity and optional schema validation

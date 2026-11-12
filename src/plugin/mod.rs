@@ -198,13 +198,38 @@ pub unsafe extern "system" fn everything_plugin_proc(msg: u32, data: *mut c_void
                 .ok()
                 .and_then(|value| value.parse::<u16>().ok())
                 .unwrap_or(DEFAULT_PORT);
-            match start_endpoint(port) {
-                Ok(bound) => log(&format!(
+            // Everything restarts a plugin set by starting the new instance before
+            // the old one has released its sockets, so the first bind is routinely
+            // refused with 10048 even though nothing is wrong. Retry briefly instead
+            // of giving up on the first attempt: without this the endpoint stays
+            // dead until the *next* restart even though the port is free seconds
+            // later. The total wait is short enough to be harmless on the host's
+            // startup thread.
+            let mut bound = None;
+            let mut last_error = String::new();
+            for attempt in 0..10u32 {
+                match start_endpoint(port) {
+                    Ok(bound_port) => {
+                        bound = Some(bound_port);
+                        break;
+                    }
+                    Err(error) => {
+                        last_error = error.to_string();
+                        if attempt < 9 {
+                            std::thread::sleep(std::time::Duration::from_millis(150));
+                        }
+                    }
+                }
+            }
+            match bound {
+                Some(bound) => log(&format!(
                     "started: MCP on http://127.0.0.1:{bound}/ — plugin {} on Everything {}",
                     env!("CARGO_PKG_VERSION"),
                     host::version_text()
                 )),
-                Err(error) => log(&format!("start failed on port {port}: {error}")),
+                None => log(&format!(
+                    "start failed on port {port} after retries: {last_error}"
+                )),
             }
             HANDLED
         }

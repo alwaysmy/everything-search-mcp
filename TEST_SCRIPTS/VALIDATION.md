@@ -59,6 +59,13 @@ regression introduced by hosting, not a property of the backend.
   "one server per request" shape cannot be swapped for a lock that still looks
   parallel from the outside.
 
+`reuses_a_connection_for_several_requests` covers keep-alive, including a pipelined
+pair sent in one write: dropping the leftover bytes would lose the second request
+and look like a hung client. Measured effect on a pooled connection: a `ping` went
+from 0.617 ms to 0.145 ms p50, and `search max_results=20` from 1.514 ms to
+0.837 ms, which puts the endpoint's overhead within noise of querying Everything's
+HTTP server directly.
+
 `TEST_SCRIPTS/multi-client-stress.ps1` covers the other half of the claim - that
 concurrent callers each get *their own* answer rather than a neighbour's. Ten
 independent clients run their own query in parallel and every returned row must

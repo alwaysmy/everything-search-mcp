@@ -65,6 +65,30 @@ Register it as an HTTP MCP server:
 Clients post to `/` or `/mcp`. The endpoint is stateless (no session id, no SSE
 stream), so `GET` returns `405` on purpose — that is legal for a tool-only server.
 
+Per-client shapes. The rows marked in the notes were checked by making the client
+itself connect, not by reading the schema:
+
+| Client | Where | Entry |
+|---|---|---|
+| DeepSeek Harness | `~/.dsh/profiles/<p>/cordis.patch.yml` | `transport: streamable-http` + `url:` |
+| opencode | `~/.config/opencode/opencode.json` | `"type": "remote"` + `"url"` |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.<name>]` + `url = "..."` |
+| pi / omp | `~/.omp/agent/mcp.json` | `mcpServers.<name>.url` |
+| Kimi Code | `~/.kimi-code/mcp.json` | `mcpServers.<name>.url` |
+
+Two gotchas worth knowing: Kimi Code's `config.toml` silently ignores a
+`[mcp_servers]` table (it reads `mcp.json` instead — `kimi doctor` reports the key
+as "ignored by the v2 engine"), and `opencode mcp add --url` appends a nested
+`mcp.servers` object instead of replacing an existing `mcp.<name>` entry, which
+leaves two servers with the same name.
+
+What was confirmed by running the client rather than reading its docs: opencode
+(`mcp list` reports connected, and no stdio child is spawned), pi/omp and Kimi
+Code (each answered one search through the endpoint). Codex's own reader accepts
+the entry (`codex mcp list`). DeepSeek Harness was not running here, so its
+profiles are config-only. ZCode stays on stdio: its `mcp.servers` map has no HTTP
+shape anywhere in this install, and it ships no CLI to add one safely.
+
 Connections are kept alive: a client that reuses one socket skips the per-call
 handshake, which was the single largest piece of this endpoint's overhead
 (~0.47 ms of a ~0.62 ms console round trip). `Connection: close` is honored, and

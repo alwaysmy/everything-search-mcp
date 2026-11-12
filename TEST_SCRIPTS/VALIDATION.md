@@ -72,9 +72,11 @@ connections took the host from 30 to 130 threads. Three tests close that hole -
 `refuses_connections_beyond_the_limit` (503 past the cap, slot released after),
 `closes_an_idle_kept_alive_connection` (idle window closes the socket), plus the
 framing pair `answers_expect_100_continue_before_the_body` and
-`refuses_chunked_request_bodies`. Verified live against the deployed plugin:
-100 sockets now stop at 78 threads (14 baseline + 64 cap) and an idle connection
-closes at 4.9 s.
+`refuses_chunked_request_bodies`. Verified live against the deployed plugin: the cap held (100 sockets against a
+64-connection limit stopped at 78 threads) and an idle connection closes at 4.9 s.
+The default is now 256, chosen from the measured cost rather than a guess: 256
+open connections add 256 threads and 9 MB RSS (≈35 KB each, plus 2 MB of reserved
+stack), and everything returns to baseline within 5 s of going idle.
 
 `TEST_SCRIPTS/multi-client-stress.ps1` covers the other half of the claim - that
 concurrent callers each get *their own* answer rather than a neighbour's. Ten

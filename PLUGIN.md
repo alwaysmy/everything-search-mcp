@@ -75,8 +75,15 @@ That has a cost worth stating, because this thread runs inside `Everything.exe`:
 | Bound | Value | Why |
 |---|---|---|
 | idle close | 5 s after a response | a kept-alive socket pins a thread; 100 idle sockets were measured holding 100 threads in the host |
-| concurrent connections | 64 | past it, new ones get `503` immediately instead of queueing |
+| concurrent connections | 256 | past it, new ones get `503` immediately instead of queueing |
 | first-request timeout | 30 s | a client that connects and never speaks still holds a slot, but only for that long |
+
+The cap costs nothing while it is not reached — it is a counter, not a
+preallocation. What costs memory is the connections themselves: measured at
+256 open sockets, `Everything.exe` grew by 256 threads and 9 MB RSS (≈35 KB per
+connection, plus 2 MB of reserved-but-uncommitted stack each), and returned to
+its baseline within 5 s of them going idle. Raise it with
+`EVERYTHING_MCP_MAX_CONNECTIONS` if you really run hundreds of agents at once.
 
 Two framing details, both deliberately refused rather than guessed at:
 `Transfer-Encoding: chunked` gets `411` (a Content-Length-only parser would read

@@ -49,7 +49,21 @@ const KEEP_ALIVE_IDLE: Duration = Duration::from_secs(5);
 /// Thread-per-connection is fine for a tool endpoint only while the count is
 /// bounded: 100 idle sockets were measured holding 100 threads inside the host.
 /// Past this limit new connections are refused with `503` rather than queued.
-const MAX_CONNECTIONS: usize = 64;
+///
+/// The limit costs nothing when idle — it is a counter, not an allocation — so it
+/// is set well above what a normal session needs (measured: 64 connections added
+/// 1 MB RSS and are gone again 5 s later). `EVERYTHING_MCP_MAX_CONNECTIONS`
+/// overrides it for a machine running an unusual number of agents.
+const MAX_CONNECTIONS: usize = 256;
+
+/// `EVERYTHING_MCP_MAX_CONNECTIONS`, or [`MAX_CONNECTIONS`].
+fn configured_max_connections() -> usize {
+    std::env::var("EVERYTHING_MCP_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(MAX_CONNECTIONS)
+}
 
 /// Admission limits for one endpoint.
 ///
@@ -94,7 +108,7 @@ impl<H: Handler + Send + 'static> Endpoint<H> {
     /// Bind `127.0.0.1:port` and start accepting. Port `0` asks the OS for a free
     /// port; the chosen one is available from [`Endpoint::addr`].
     pub fn start(port: u16, handler: HandlerFactory<H>) -> std::io::Result<Self> {
-        Self::start_with(port, handler, MAX_CONNECTIONS, KEEP_ALIVE_IDLE)
+        Self::start_with(port, handler, configured_max_connections(), KEEP_ALIVE_IDLE)
     }
 
     /// [`Endpoint::start`] with the admission limits spelled out. Tests use this

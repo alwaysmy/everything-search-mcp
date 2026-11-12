@@ -493,14 +493,22 @@ impl Group {
 
     fn from_outcome(o: everything::BackendOutcome) -> Self {
         match o.result {
-            Ok(resp) => Self {
-                backend: o.backend,
-                total: resp.total_results,
-                consumed: resp.results.len(),
-                offset: 0,
-                items: resp.results.into_iter().map(Item::from).collect(),
-                error: None,
-            },
+            Ok(resp) => {
+                // One offset for the whole response, not one per row.
+                let tz = everything::local_offset_minutes();
+                Self {
+                    backend: o.backend,
+                    total: resp.total_results,
+                    consumed: resp.results.len(),
+                    offset: 0,
+                    items: resp
+                        .results
+                        .into_iter()
+                        .map(|r| Item::from_raw(r, tz))
+                        .collect(),
+                    error: None,
+                }
+            }
             Err(e) => Self {
                 backend: o.backend,
                 total: 0,
@@ -867,7 +875,7 @@ impl Handler for Tools {
                 "category": p_enum(&format!("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause. {cats_desc}."), &cats, Some("")),
                 "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
-                "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
+                "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
                 "offset": p_int("Skip N results (pagination)", 0, 0, 2147483647),
                 "sort": p_string(&sort_desc, Some("date-modified-desc")),
                 "match_case": p_bool("Case-sensitive search. Prefer the `case:` search function inside query - it works in every tool, including everything_count_stats and everything_find_recent, which have no match_* parameters. This parameter is for regex searches, where functions are unreliable.", false),
@@ -888,7 +896,7 @@ impl Handler for Tools {
                 "path": p_string("Restrict to this directory path", Some("")),
                 "extensions": p_string("Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'", Some("")),
                 "query": p_string("Additional search filter", Some("")),
-                "max_results": p_int("Maximum results to return (1-500)", 50, 1, 500),
+                "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
                 "auto_expand": p_bool("When the period yields fewer than max_results hits, retry across all time. The response reports whether this happened via `expanded` and `effective_period`.", true),
                 "url": p_url(&url_desc()),
             }),
@@ -1049,6 +1057,16 @@ fn item_json(it: &Item, source: Option<&str>) -> Value {
 /// Select a displayed page and retain the raw prefix actually consumed. Rows
 /// fetched past the last displayed hit remain eligible for the next page.
 fn select_page(items: Vec<Item>, per_parent: usize, limit: usize) -> (Vec<Item>, usize) {
+    // With no per-directory cap every row is kept, so the visited map would be
+    // written and never read - while lowercasing each path allocates a String per
+    // result. That is the default (`max_per_parent` is 0), so take the short path
+    // and leave the map out of it entirely.
+    if per_parent == 0 {
+        let mut out = items;
+        let consumed = out.len().min(limit);
+        out.truncate(consumed);
+        return (out, consumed);
+    }
     let mut seen = std::collections::HashMap::<String, usize>::new();
     let mut out = Vec::new();
     let mut consumed = 0;
@@ -1058,7 +1076,7 @@ fn select_page(items: Vec<Item>, per_parent: usize, limit: usize) -> (Vec<Item>,
         }
         consumed += 1;
         let count = seen.entry(it.path.to_lowercase()).or_insert(0);
-        if per_parent == 0 || *count < per_parent {
+        if *count < per_parent {
             *count += 1;
             out.push(it);
         }
@@ -1132,6 +1150,16 @@ fn format_items(items: &[Item], offset: usize, total: u64) -> String {
 
 // ---------------------------------------------------------------- tools
 
+/// Rows a search returns when the caller does not say.
+///
+/// 20 rather than 50 because the cost of a broad search is paid in the caller's
+/// context, not in server time: 50 rows of text is about 1,400 tokens, and a query
+/// that broad is nearly always one the caller should have narrowed instead. The
+/// response already carries `total` - that is the signal to narrow - while
+/// `has_more` and `next_offset` cover the case where more rows really are wanted.
+/// The CLI has defaulted to 20 since it was written; this brings MCP in line.
+const DEFAULT_MAX_RESULTS: usize = 20;
+
 /// Everything's HTTP API returns sizes per row but has no aggregate, so summing
 /// every match is the only route to an exact total. Bounded so a huge query cannot
 /// run away, and the caller is told when the bound is hit rather than given a guess.
@@ -1154,6 +1182,9 @@ impl Tools {
             ));
         }
         let client = Client::new(backend.config.clone());
+        // The exact-size pass can read 200k rows; take the offset once here rather
+        // than once per row.
+        let tz = everything::local_offset_minutes();
         let mut sum = running;
         let mut offset = already_have;
         while (offset as u64) < total {
@@ -1182,7 +1213,11 @@ impl Tools {
             if page.results.len() as u64 > total.saturating_sub(offset as u64) {
                 return Err("index returned more rows than its reported remaining count".into());
             }
-            let rows: Vec<Item> = page.results.into_iter().map(Item::from).collect();
+            let rows: Vec<Item> = page
+                .results
+                .into_iter()
+                .map(|r| Item::from_raw(r, tz))
+                .collect();
             sum = sum
                 .checked_add(file_size_sum(&rows)?)
                 .ok_or_else(|| "file size sum exceeds u64".to_string())?;
@@ -1215,7 +1250,7 @@ impl Tools {
             ));
         }
         let max =
-            cap(self.client.config(), u(args, "max_results", 50)).min(budget.unwrap_or(usize::MAX));
+            cap(self.client.config(), u(args, "max_results", DEFAULT_MAX_RESULTS)).min(budget.unwrap_or(usize::MAX));
         let offset = u(args, "offset", 0);
         let sort = s_or(args, "sort", "date-modified-desc");
         everything::validate_sort(&sort)?;
@@ -1449,7 +1484,7 @@ impl Tools {
                 }
             },
         };
-        let max = cap(self.client.config(), u(args, "max_results", 50));
+        let max = cap(self.client.config(), u(args, "max_results", DEFAULT_MAX_RESULTS));
         let path = opt(args, "path");
         let extra = s(args, "query");
         let extensions = s(args, "extensions");
@@ -1784,7 +1819,7 @@ impl Tools {
                 "status":if complete {"not_indexed"} else {"incomplete"},"source":backend.name,"error":msg});
         };
 
-        let item = Item::from(hit);
+        let item = Item::from_raw(hit, everything::local_offset_minutes());
         let name = Path::new(&item.name)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())

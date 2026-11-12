@@ -59,6 +59,14 @@ regression introduced by hosting, not a property of the backend.
   "one server per request" shape cannot be swapped for a lock that still looks
   parallel from the outside.
 
+`TEST_SCRIPTS/multi-client-stress.ps1` covers the other half of the claim - that
+concurrent callers each get *their own* answer rather than a neighbour's. Ten
+independent clients run their own query in parallel and every returned row must
+carry that client's extension; a total may drift by up to 5% because Everything
+re-indexes while the test runs, but a total from somebody else's query fails.
+Verified by deliberately expecting the wrong extension: the run exits 1 with
+`expected .png, got SKILL.md`. A clean run of 200 calls holds p95 under 90 ms.
+
 `TEST_SCRIPTS/parallel-probe.ps1` repeats the measurement against a live index
 (slow solo, fast solo, fast while slow) and fails if a concurrent fast call
 exceeds `max(150 ms, 5x solo)`. It is the release check, not CI: it needs Windows

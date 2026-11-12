@@ -24,10 +24,18 @@ $src = Join-Path $root 'target\release\everything-search-mcp.exe'
 # so the name is freed by moving the old binary aside instead.
 function Clear-Target([string]$Path) {
     if (-not (Test-Path $Path)) { return }
-    $old = "$Path.old"
-    Remove-Item $old -Force -ErrorAction SilentlyContinue
-    try { Move-Item $Path $old -Force -ErrorAction Stop }
-    catch { Remove-Item $Path -Force }
+    # The aside name must be unique per deploy. A fixed `.old` collides with the
+    # previous deploy's aside copy, which a running server may still have mapped -
+    # and a mapped file can be neither overwritten nor deleted, so the rename fails
+    # and the whole deploy stops. The sweep at the end collects them once free.
+    $old = "$Path.old-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    try {
+        Move-Item $Path $old -Force -ErrorAction Stop
+    } catch {
+        # If the name truly cannot be freed, say so instead of carrying on and
+        # copying over a file that is still executing.
+        throw "cannot replace $Path - it is in use and could not be renamed aside: $($_.Exception.Message)"
+    }
 }
 
 if (-not $NoBuild) {
@@ -50,6 +58,37 @@ New-Item -ItemType Directory -Force -Path (Split-Path $skillExe) | Out-Null
 Clear-Target $skillExe
 Copy-Item $src $skillExe -Force
 Write-Host "skill   $skillExe"
+
+# Keep the skill copy of SKILL.md in step with the repo. Without this the
+# deployed doc silently drifts from the semantics the binary implements.
+#
+# The skill directory can be a junction into this repo, in which case the source
+# and destination are literally the same file and Copy-Item refuses to overwrite
+# an item with itself. Comparing content first covers both that case and the
+# ordinary already-in-step one, since an identical hash means there is nothing to
+# copy either way.
+$skillMdSrc = Join-Path $root "skills\everything-search\SKILL.md"
+if (Test-Path $skillMdSrc) {
+    $mdDst = Join-Path $SkillDir "SKILL.md"
+    $inStep = $false
+    if (Test-Path $mdDst) {
+        try {
+            $inStep = (Get-FileHash $mdDst -Algorithm SHA256).Hash -eq
+                      (Get-FileHash $skillMdSrc -Algorithm SHA256).Hash
+        } catch {
+            $inStep = $false
+        }
+    }
+    if ($inStep) {
+        Write-Host "skill   $mdDst (already in step)"
+    } else {
+        if (Test-Path $mdDst) {
+            Write-Host "warn    $mdDst differed from the repo copy; overwriting it (git has the history)"
+        }
+        Copy-Item $skillMdSrc $mdDst -Force
+        Write-Host "skill   $mdDst"
+    }
+}
 
 if (Test-Path $BinDir) {
     foreach ($name in 'everything-search-mcp.exe', 'everything-mcp.exe') {
@@ -76,7 +115,7 @@ if (Test-Path $BinDir) {
 # the next deploy after a restart.
 $blocked = @()
 foreach ($dir in @((Split-Path $skillExe), $BinDir)) {
-    foreach ($f in (Get-ChildItem "$dir\everything*.exe.old" -Force -ErrorAction SilentlyContinue)) {
+    foreach ($f in (Get-ChildItem "$dir\everything*.exe.old*" -Force -ErrorAction SilentlyContinue)) {
         try {
             Remove-Item $f.FullName -Force -ErrorAction Stop
             # Unlinking one of several names for the same file leaves Everything's

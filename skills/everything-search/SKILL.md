@@ -5,6 +5,11 @@ description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫�
 
 # everything-search MCP 使用指南
 
+> **没有 MCP 工具的环境（例如 pi 这类只有 read/write/edit/bash 的 harness）**：
+> 不要调用下面的 `everything-search-mcp.exe`——它是 MCP server，不接受命令行搜索参数，
+> 照 MCP 示例当命令跑会连续失败。改用 Everything 自带的命令行 `es.exe`，
+> 见本文末尾「无 MCP 时的用法（pi 等纯 CLI harness）」一节。
+
 调用 Windows 上基于 voidtools Everything 实时 NTFS 索引的 `everything_*` MCP 工具。
 **单次查询约 1 毫秒**，所以任何"按文件名/扩展名/大小/日期找东西"的场景都应该优先用它，
 而不是 `dir /s`、`Get-ChildItem -Recurse` 或 glob。
@@ -201,11 +206,11 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 | **`category`** | 十选一：`code` `document` `image` `video` `audio` `archive` `executable` `font` `3d` `data`。**优先用它**，不要自己手拼扩展名列表 |
 | **`entry_type`** | `any`（默认）/ `file` / `folder`。**找工程目录、安装目录时必须用 `folder`**，不要靠结果猜类型 |
 | `path` | 限定目录树。比在 query 里写 `path:` 更可靠 |
-| `max_results` | 1–500，默认 50 |
+| `max_results` | 1–500，**默认 20** |
 | `offset` | 分页 |
 | `sort` | 14 种，见下表；默认 `date-modified-desc` |
 | `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符。**生效情况看回传的 `match_modes`**，别只看 `effective_query` |
-| **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 50 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
+| **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 20 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
 | `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
 | **`url`** | 搜哪台机器：名字、地址、或数组（多台一起搜）。**替换默认集合**，详见「搜别的机器」 |
 
@@ -367,14 +372,42 @@ wholeword:read                # 全词匹配
 
 ## 最佳实践
 
-1. **先粗后细**：先用简单 `query`，结果太多再加 `path` / `category` / `ext:`。
+1. **先看 `total`，再决定要不要翻页。** 每条结果尾部都有
+   `20 result(s) from offset 0 of 353178 matching (exact total).` ——
+   `353178 / 20 = 17659`，这说明查询太宽，**该收窄，不该翻页**。
+   翻 50 页才看完 1000 条，等于把 token 倒进一个没底的桶。
+
+   **收窄手段，按实测倍数排**（基准：`read` 命中 155,903；`config` 141,221；
+   `main` 91,684 —— 三组查询结论一致）：
+
+   | 手段 | 例子 | 实测收窄 |
+   |---|---|---|
+   | **`category` / `ext:`** | `read ext:py` | **÷26 ~ ÷408**（最强） |
+   | `path` 参数 | `--path D:\MyProjects` | ÷5 ~ ÷6 |
+   | **两者叠加** | `read ext:py --path D:\MyProjects` | **÷500 ~ ÷1,250** |
+   | `!path:<目录>` 排除整棵树 | `read !path:node_modules` | ÷1.25 |
+   | `parent:` | `parent:D:\src`（只搜下一层） | 视层级 |
+   | `exact:` / `wholeword:` / `case:` | 提高单条命中精度 | 不定量 |
+
+   **两个必须记住的坑：**
+   - **`!目录名` 只匹配"名字"，不匹配路径。** `!node_modules` 几乎不减条数
+     （155,903 → 155,897，名字含它的只有 6 个）；要排除整棵树**必须写
+     `!path:node_modules`**（→ 124,242）。
+   - **排除的收益本来就有限** —— 索引已排除 `.git` / `__pycache__` / `.venv` 等。
+     真正的数量级来自 **`ext:`/`category` 和 `path`**，不是排除。
+
+   **两步就能把 15 万条降到几百条**：先 `ext:`（或 `category`），再 `path`。
+   一次 5 条的精准查询远比一次 20 条的宽泛查询有用 —— 宽泛查询之后几乎总要再搜一次。
 2. **找目录用 `entry_type: "folder"`**，不要从文件结果里猜哪个是工程根目录。
 3. **类型搜索用 `category`**，不要手动拼扩展名列表。
 4. **最近改动用 `everything_find_recent`**，不要手写 `dm:`。
 5. **可能命中上千条时先用 `everything_count_stats` 探规模**，再决定要不要列表。
+   `count` 是精确值，`0` 就是确定的"没有"。
 6. **结果不合预期先读 `effective_query`**。
 7. **要预览文件内容**：先 `everything_search` 拿路径，再 `everything_file_details`；
    或者直接用 agent 自己的 read 工具（本 MCP 不重复提供文件读取能力）。
+8. **默认只返回 20 条**。要更多就显式传 `max_results`，或者跟着 `next_offset` 翻页 ——
+   但先问一句：真的需要第 30 条吗，还是该换一个更准的查询？
 
 ## 陷阱与排错
 
@@ -407,3 +440,29 @@ wholeword:read                # 全词匹配
   未索引或连接失败时exists为null，另外看indexed/status；不能据此断言文件不存在。
   清掉幽灵：在那个路径上做一次干净的"创建 + 删除"即可（新 inode、无其它链接）。
 - **NTFS 之外**：exFAT/FAT/网络盘没有 MFT，Everything 只能慢速扫描，结果可能不全。
+
+## 无 MCP 时的用法（pi 等纯 CLI harness）
+
+这类 harness 没有 MCP 工具，但有 bash。改用 Everything 命令行 `es.exe`：
+
+```bash
+ES="/c/Users/AlwaysTS/AppData/Local/Everything/es.exe"
+"$ES" -path "D:\proj" "ext:py;md"                                # 秒级列候选
+"$ES" -path "D:\llm" "ext:gguf" -sort size-descending | head -5  # 按大小取 Top-N
+"$ES" -path "D:\llm" "size:>10gb"                                # 按大小过滤
+"$ES" -path "D:\llm" "dm:today"                                  # 今天修改过
+```
+
+**两个实测坑（2026-09-28）**：
+
+1. **`-sort` 不要和 `-n` 同用**：`-n` 在排序之前就截断，会漏掉真正最大的文件
+   （实测漏掉了 28.5 GB 的最大模型，只返回 27.2/20.2/14 GB）。排序后只用管道截断：
+   `... -sort size-descending | head -N`。
+2. 扩展名过滤用 Everything 搜索语法 `ext:gguf`，**没有 `-ext` 参数**
+   （`-ext gguf` 会被忽略，结果里混进 .cpp/.py 等无关文件）。
+
+完整性说明：Everything 依赖索引，若怀疑索引滞后（刚创建/移动的大文件），
+用 `find` 或 `Get-ChildItem -Recurse` 做一次实时校验。
+
+**取 Top-N 的可靠两步法**：先用 `es.exe` 快速列候选（毫秒级），
+再用 `stat`/`ls -l` 核实大小并排序，可完全避开上面的排序坑。

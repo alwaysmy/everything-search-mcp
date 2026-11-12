@@ -95,50 +95,132 @@ fn run(cmd: &str, rest: &[String]) -> i32 {
     while i < rest.len() {
         let a = rest[i].as_str();
         let r = match a {
-            "--path" => need(i, rest, a).map(|v| { args.insert("path".into(), json!(v)); i += 2; }),
-            "--category" => need(i, rest, a).map(|v| { args.insert("category".into(), json!(v)); i += 2; }),
-            "--type" => need(i, rest, a).map(|v| { args.insert("entry_type".into(), json!(v)); i += 2; }),
-            "--sort" => need(i, rest, a).map(|v| { args.insert("sort".into(), json!(v)); i += 2; }),
-            "--period" => need(i, rest, a).map(|v| { args.insert("period".into(), json!(v)); i += 2; }),
-            "--ext" | "--extensions" => need(i, rest, a).map(|v| { args.insert("extensions".into(), json!(v)); i += 2; }),
+            "--path" => need(i, rest, a).map(|v| {
+                args.insert("path".into(), json!(v));
+                i += 2;
+            }),
+            "--category" => need(i, rest, a).map(|v| {
+                args.insert("category".into(), json!(v));
+                i += 2;
+            }),
+            "--type" => need(i, rest, a).map(|v| {
+                args.insert("entry_type".into(), json!(v));
+                i += 2;
+            }),
+            "--sort" => need(i, rest, a).map(|v| {
+                args.insert("sort".into(), json!(v));
+                i += 2;
+            }),
+            "--period" => need(i, rest, a).map(|v| {
+                args.insert("period".into(), json!(v));
+                i += 2;
+            }),
+            "--ext" | "--extensions" => need(i, rest, a).map(|v| {
+                args.insert("extensions".into(), json!(v));
+                i += 2;
+            }),
             "--max" | "--max-results" => need(i, rest, a).and_then(|v| {
-                v.parse::<u64>().map(|n| { args.insert("max_results".into(), json!(n)); i += 2; })
+                v.parse::<u64>()
+                    .map(|n| {
+                        args.insert("max_results".into(), json!(n));
+                        i += 2;
+                    })
                     .map_err(|_| format!("{a} needs a number, got '{v}'"))
             }),
             "--offset" => need(i, rest, a).and_then(|v| {
-                v.parse::<u64>().map(|n| { args.insert("offset".into(), json!(n)); i += 2; })
+                v.parse::<u64>()
+                    .map(|n| {
+                        args.insert("offset".into(), json!(n));
+                        i += 2;
+                    })
                     .map_err(|_| format!("{a} needs a number, got '{v}'"))
             }),
             "--per-parent" => need(i, rest, a).and_then(|v| {
-                v.parse::<u64>().map(|n| { args.insert("max_per_parent".into(), json!(n)); i += 2; })
+                v.parse::<u64>()
+                    .map(|n| {
+                        args.insert("max_per_parent".into(), json!(n));
+                        i += 2;
+                    })
                     .map_err(|_| format!("{a} needs a number, got '{v}'"))
             }),
             "--preview" | "--preview-lines" => need(i, rest, a).and_then(|v| {
-                v.parse::<u64>().map(|n| { args.insert("preview_lines".into(), json!(n)); i += 2; })
+                v.parse::<u64>()
+                    .map(|n| {
+                        args.insert("preview_lines".into(), json!(n));
+                        i += 2;
+                    })
                     .map_err(|_| format!("{a} needs a number, got '{v}'"))
             }),
-            "--regex" => { args.insert("match_regex".into(), json!(true)); i += 1; Ok(()) }
-            "--case" => { args.insert("match_case".into(), json!(true)); i += 1; Ok(()) }
-            "--whole-word" => { args.insert("match_whole_word".into(), json!(true)); i += 1; Ok(()) }
-            "--match-path" => { args.insert("match_path".into(), json!(true)); i += 1; Ok(()) }
-            "--total" => { args.insert("include_total".into(), json!(true)); i += 1; Ok(()) }
-            "--probe" => { args.insert("probe".into(), json!(true)); i += 1; Ok(()) }
-            "--exact-size" => { args.insert("exact_size".into(), json!(true)); i += 1; Ok(()) }
-            "--breakdown" => { args.insert("breakdown_by_extension".into(), json!(true)); i += 1; Ok(()) }
-            "--json" => { args.insert("__json".into(), json!(true)); i += 1; Ok(()) }
-            "--no-expand" => { args.insert("auto_expand".into(), json!(false)); i += 1; Ok(()) }
+            "--regex" => {
+                args.insert("match_regex".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--case" => {
+                args.insert("match_case".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--whole-word" => {
+                args.insert("match_whole_word".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--match-path" => {
+                args.insert("match_path".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--total" => {
+                args.insert("include_total".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--probe" => {
+                args.insert("probe".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--exact-size" => {
+                args.insert("exact_size".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--breakdown" => {
+                args.insert("breakdown_by_extension".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--json" => {
+                args.insert("__json".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
+            "--no-expand" => {
+                args.insert("auto_expand".into(), json!(false));
+                i += 1;
+                Ok(())
+            }
             // Repeatable: each occurrence adds an instance, so
             // `--url local --url nas` searches both. Always an array, which is one of
             // the two shapes the argument accepts, so there is no special case.
             "--url" | "--server" => need(i, rest, a).map(|v| {
-                match args.entry("url").or_insert_with(|| json!([])).as_array_mut() {
+                match args
+                    .entry("url")
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                {
                     Some(list) => list.push(json!(v)),
                     None => unreachable!("url is only ever written as an array here"),
                 }
                 i += 2;
             }),
             other if other.starts_with("--") => Err(format!("unknown flag '{other}'")),
-            _ => { positional.push(rest[i].clone()); i += 1; Ok(()) }
+            _ => {
+                positional.push(rest[i].clone());
+                i += 1;
+                Ok(())
+            }
         };
         if let Err(e) = r {
             eprintln!("everything-search-mcp: {e}");
@@ -184,7 +266,10 @@ fn run(cmd: &str, rest: &[String]) -> i32 {
     match tools.call_tool(tool, &Value::Object(args)) {
         Ok(out) => {
             if want_json {
-                println!("{}", serde_json::to_string_pretty(&out.structured).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&out.structured).unwrap_or_default()
+                );
             } else {
                 print!("{}", out.text);
             }
@@ -361,7 +446,10 @@ fn servers_remove(rest: &[String]) -> i32 {
 fn servers_toggle(rest: &[String], on: bool) -> i32 {
     let name = rest.get(1).map(|s| s.trim()).unwrap_or("");
     if name.is_empty() {
-        eprintln!("everything-search-mcp: servers {} needs a name", if on { "enable" } else { "disable" });
+        eprintln!(
+            "everything-search-mcp: servers {} needs a name",
+            if on { "enable" } else { "disable" }
+        );
         return 2;
     }
     let mut reg = match load_registry() {

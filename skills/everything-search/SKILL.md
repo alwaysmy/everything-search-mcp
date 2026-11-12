@@ -3,16 +3,12 @@ name: everything-search
 description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫秒级文件搜索）。触发词：找文件、搜文件、搜索文件、查找文件、文件搜索、Everything 搜索、按类型搜索、最近文件、文件详情、文件统计、文件大小、文件数量、找 datasheet / 手册 / 文档 / 图片 / 视频 / 代码、找工程目录、找项目、这个目录里有什么、列一下文件、哪个文件包含、在文件里找、什么最占空间、大文件、重复文件、空文件夹、在哪、位置、路径、搜别的电脑、远程搜索、另一台机器上的文件、多台机器一起搜、那台服务器上有没有。English triggers — find file, locate file, search files, where is, list files, file search, search my computer, find the config file, find a document, largest files, duplicate files, empty folders, recent changes, what changed, which file contains, grep for text, find the datasheet, file size, count files, find project, find the project folder, search another machine, search a remote computer, search multiple machines, remote Everything server."
 ---
 
+
 # everything-search MCP 使用指南
 
-> **没有 MCP 工具的环境（例如 pi 这类只有 read/write/edit/bash 的 harness）**：
-> 不要调用下面的 `everything-search-mcp.exe`——它是 MCP server，不接受命令行搜索参数，
-> 照 MCP 示例当命令跑会连续失败。改用 Everything 自带的命令行 `es.exe`，
-> 见本文末尾「无 MCP 时的用法（pi 等纯 CLI harness）」一节。
-
-调用 Windows 上基于 voidtools Everything 实时 NTFS 索引的 `everything_*` MCP 工具。
-**单次查询约 1 毫秒**，所以任何"按文件名/扩展名/大小/日期找东西"的场景都应该优先用它，
-而不是 `dir /s`、`Get-ChildItem -Recurse` 或 glob。
+> 判断该不该用、怎么不踩坑 → 本文。完整参数、CLI 兜底、**搜别的机器**、类别扩展名表、排错全集 → 同目录 `REFERENCE.md`。
+> **没有 MCP 的环境（pi 之类只有 bash 的 harness）**：不要把 `everything-search-mcp.exe` 当命令跑，
+> 改用 Everything 自带的 `es.exe`，见 `REFERENCE.md` 的「无 MCP 时的用法」。
 
 ## 前提：Everything 的 HTTP 服务器必须是开着的
 
@@ -26,64 +22,6 @@ description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫�
 > 不需要 `es.exe`，也**没有** `EVERYTHING_ES_PATH` 这个变量（写了会被忽略）——
 > 所以没有任何外部程序路径需要配。整个服务端只依赖"Everything 进程在跑 + HTTP 口开着"。
 
-## 配置 MCP（不用手写路径）
-
-同一个 exe 自带配置生成器：它知道自己的绝对路径，所以**任何客户端配置都不用手写**，
-skill 目录搬走也不会失效。
-
-```powershell
-<本 skill 目录>\bin\everything-search-mcp.exe config            # 只看：列出本机有哪些客户端 + 该粘什么
-<本 skill 目录>\bin\everything-search-mcp.exe config --write    # 应用：自动写进各客户端配置（先备份）
-<本 skill 目录>\bin\everything-search-mcp.exe config --target dsh --write
-<本 skill 目录>\bin\everything-search-mcp.exe config --target opencode --name 旧名字 --remove
-<本 skill 目录>\bin\everything-search-mcp.exe config --json     # 机器可读
-```
-
-- 默认只处理**本机已存在**的配置文件：`dsh`(DeepSeek Harness) `claude`(Claude Code)
-  `claude-desktop` `codex` `gemini` `cursor` `vscode` `opencode`，外加 `json`（纯打印一段通用块）。
-- 每个被改动的文件先备份成 `<原名>.bak-<UTC 时间戳>Z`；只替换自己那一条条目，
-  其它条目/注释原样保留；重复运行第二次是 no-op。
-- `--remove` 是反向操作：把这一条条目删掉（同样是先备份）。**改了 server 名字时用它**，
-  否则客户端里会同时存在新旧两条，工具被注册两遍。
-- 输出里会顺带探测 Everything 是否可达、当前索引了多少对象。
-- **不带 `--write` / `--remove` 时一个字节都不写**。
-- 更多安装/排错细节见同目录 `INSTALL.md`。
-
-> **给 AI 的提示**：只有当用户明确要求"配置/安装 everything MCP"时才动配置。
-> 判断某个客户端到底有没有配好，用 `config` 的打印模式看，不要凭猜。
-
-## 没有 MCP 时的裸调用（CLI 模式）
-
-同一个 exe 也是命令行工具 —— **不带参数时是 MCP 服务端**（客户端就是这样拉起它的），
-**带子命令时是一次性 CLI**。所以即使 MCP 没装、没配、或当前 agent 不支持 MCP，
-也可以直接用 shell 调：
-
-```
-<本 skill 目录>\bin\everything-search-mcp.exe search "*.py" --path D:\Projects --max 20
-<本 skill 目录>\bin\everything-search-mcp.exe recent --period 1week --path D:\Projects
-<本 skill 目录>\bin\everything-search-mcp.exe count "ext:pdf" --exact-size
-<本 skill 目录>\bin\everything-search-mcp.exe details D:\a\b.rs --preview 20
-<本 skill 目录>\bin\everything-search-mcp.exe config            # 生成 MCP 配置
-<本 skill 目录>\bin\everything-search-mcp.exe --help
-```
-
-常用 flag：`--path` `--category` `--type file|folder` `--max` `--offset` `--sort`
-`--per-parent` `--regex` `--case` `--whole-word` `--match-path` `--total` `--probe`
-`--period` `--ext` `--preview` `--exact-size` `--breakdown` `--json`
-`--url <名字|地址>`（可重复，搜多台机器；见「搜别的机器」）
-
-```powershell
-<exe> servers list                                   # 已登记的机器与开关
-<exe> servers add <名字> <地址> [--disabled]         # 登记（首次默认打开）
-<exe> servers enable|disable|remove <名字>
-<exe> servers path                                   # 配置文件位置
-```
-
-退出码：`0` 成功、`1` 查询失败（错误在 stderr）、`2` 参数错误。
-`--json` 输出结构化结果而非文本。
-
-> **优先用 MCP 工具**（`everything_*`）：它是常驻进程，省去每次启动开销，且结构化字段更全。
-> CLI 是**没有 MCP 时的兜底**，以及在脚本/CI 里用的形态。
 
 ## 工具速查（5 个）
 
@@ -98,105 +36,6 @@ skill 目录搬走也不会失效。
 > 老版本里的 `everything_search_by_type` **已并入 `everything_search` 的 `category` 参数**。
 > 不要再调那个工具名。
 
-## 搜别的机器（远程 Everything）
-
-Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 在跑、HTTP 口开着，
-这些工具就能直接搜它的索引。**同一个工具，多一个 `url` 参数** ——
-不需要 WinRM、不需要登录那台机器、不需要装东西。
-
-`url` 直接给地址就能用，**不登记也行**：
-
-```json
-{ "query": "*.pdf", "url": "http://10.0.0.2:23333" }
-{ "query": "*.pdf", "url": ["local", "http://10.0.0.2:23333"] }
-```
-
-用户登记过的机器可以用名字（工具描述里的 `Known names` 会列出当前有哪些）：
-
-```json
-{ "query": "*.pdf", "url": "workshop" }
-```
-
-三种取值：
-
-| `url` | 搜谁 |
-|---|---|
-| 不传 | 所有**已打开**的机器（默认只有本机） |
-| `"workshop"` 或 `"http://10.0.0.2:23333"` | 只搜这一台 |
-| `["local", "workshop"]` | 两台一起搜，结果按机器分组 |
-
-**`url` 是替换，不是追加。** 传了就只搜传的那些 —— 想"本机 + 远程"必须显式写
-`["local", "workshop"]`。这样"搜那台机器"不会偷偷把本机也搜进去。
-
-### 多机结果长什么样
-
-每条命中始终带 `source`，单台也一样。多台时文本按机器分段，每段头一行是机器名和地址；
-另有 `backends[]` 列出每台的 `total` / `returned` / `consumed` / `next_offset` / 错误。
-
-```
-=== local (http://127.0.0.1:23333) - 842 matching
-  [FILE] D:\Projects\a.pdf  (1.2 MB, 2026-09-22 17:45:34)
-=== workshop (http://10.0.0.2:23333) - 1274 matching
-  [FILE] E:\manuals\3458A\Ag_3458A_UserGuide_en.pdf  (7.7 MB, 2026-09-23 01:27:25)
-
-4 result(s) from offset 0 across 2 of 2 indexes; 2116 matching in total (exact).
-```
-
-必须知道的几点：
-
-- **路径是那台机器上的路径，在本机打不开。** 每条结果带 `source` 就是为了这个：
-  **`source` 不是 `local` 的路径，不要拿去 read、不要拿去 `everything_file_details`**
-  （除非把同一个 `url` 也传过去）—— 否则你是在本机找一个同名的、完全不同的文件，
-  而且**不会报错**。
-- **`total` 只汇总可达索引。** 任一索引失败时，`total_accuracy` 为 `partial`，
-  `total_scope` 为 `reachable indexes`。全部失败时的0不表示所有机器都无匹配。
-- **`offset` 是"每台各自"的**（回传带 `offset_scope: "per instance"`）。
-  游标按已消耗的原始行前进，包含被每目录限额跳过的行。各台游标不同则顶层
-  `next_offset` 为 null；保持查询、筛选和排序，把各条 `backends[].url` 与
-  `backends[].next_offset` 分别传入下一次单台搜索。失败索引用原offset重试。
-- **某台连不上不会让整次搜索失败**：它的错误单独列在那一台下面，其它机器的结果照常返回，
-  汇总行会写 `N index(es) unreachable`。**只有单台时**失败才等于工具报错。
-- **单台仍是扁平列表，但也含source与完整性说明。** 使用旧缓存输出schema的客户端
-  应刷新tools/list。这些新增字段和可空游标是有意的接口修正。
-
-### 什么时候该用多机
-
-- 用户说"**那台机器上**有没有 / **服务器上**找找" → `url` 给那一台。
-- 用户说"哪台有都行 / 都找找" → 传数组，或者不传（如果用户已经把远程机器打开了）。
-- **本机搜不到不等于没有** —— 如果用户提过有另一台机器放资料，值得带 `url` 再搜一次。
-- 别为了"更全"就无脑把远程都打开：多一台就多一次网络往返，而且结果里会混进
-  那台机器的路径，反而更难读。
-
-### 登记（用户配置动作）
-
-登记写进 `%APPDATA%\everything-search-mcp\servers.json`，开关会记住（关掉的机器保持关，
-不会每次搜索都去等它超时）：
-
-```powershell
-<exe> servers add workshop http://10.0.0.2:23333     # 登记并打开
-<exe> servers add nas http://10.0.0.3:23333 --disabled
-<exe> servers list                                   # 看登记与开关
-<exe> servers disable workshop                       # 临时摘掉，保留登记
-<exe> servers path                                   # 配置文件在哪
-```
-
-`local` 是内置的，不用登记；登记它只是给本机一个自己的开关和地址。
-配置文件**每次调用都会重读**，所以改完立刻生效，不用重启 MCP 服务端。
-
-## 参数一律平铺在顶层
-
-```json
-{ "query": "*.py", "path": "D:\\Projects", "category": "code" }
-```
-
-**不要**包一层 `params` —— 服务端为了兼容老客户端虽然也接受 `{"params": {...}}`，
-但正确写法是平铺。
-
-> **参数名写错会被点名。** 未知参数一律被忽略，所以写错名字**不会**报"未知参数"，
-> 而是表现为别的问题 —— 典型是把 `entry_type` 写成 `type`，于是 query 为空，
-> 报的是 `query is required`，看起来像"没给查询"。
-> 现在**报错里会列出你实际传了哪些不认识的参数，并指出近似拼写**：
-> `'type' looks like a misspelling of 'entry_type'`。看到这段就直接改名字，不要绕路。
 
 ## `everything_search` 关键参数
 
@@ -214,28 +53,6 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 | `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
 | **`url`** | 搜哪台机器：名字、地址、或数组（多台一起搜）。**替换默认集合**，详见「搜别的机器」 |
 
-## 看 `effective_query` 自查
-
-每个结果都会回传 **`effective_query`** —— 服务端实际执行的 Everything 表达式
-（`path`/`category`/`entry_type`/`period` 展开之后）。**结果不合预期时先看它**，
-比猜哪个参数没生效快得多。
-
-> **注意：`match_case` / `match_whole_word` / `match_path` 不会出现在 `effective_query` 里。**
-> 它们是以 HTTP 参数下发的，不是表达式的一部分。这三个的生效情况看
-> **`match_modes`** 字段（文本形式里是 `match modes:` 一行），没设时是空数组。
-> `match_regex` 例外 —— 它会编译成 `regex:` 函数，所以在 `effective_query` 里看得见。
-
-结构化客户端还能拿到 `structuredContent`，字段与文本内容一致：
-`query` / `effective_query` / `match_modes` / `total` / `total_accuracy` / `returned` /
-`offset` / `next_offset` / `has_more` / `results[]`，每条含 `name` `path` `full_path`
-`type` `size` `modified` **`source`**；另有 `backends[]`（每台的 `source` / `url` /
-`total` / `returned` / `error`），多台时还有 `offset_scope`。
-
-> **`source` 是"这条命中来自哪个索引"**，`local` 是本机，其余是那台机器的名字或 `host:port`。
-> 非 `local` 的路径属于那台机器，在本机读不到 —— 见「搜别的机器」。
-
-> `modified` 是**本地时间**（和资源管理器显示的一致），格式 `YYYY-MM-DD HH:MM:SS`。
-> 直接报给用户即可，不要自己再加时区偏移。
 
 ## 精度：哪些是精确的，哪些是采样
 
@@ -250,88 +67,6 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 不再只在少量结果时拼接三份首页。`max_total_results`严格限制批量输出总条数；
 每个成功子项保留完整的游标、后端错误、match_modes和总量scope。
 
-## `everything_find_recent`
-
-- `period`：默认 `1day`。可选 `1min` `5min` `10min` `15min` `30min` `1hour` `2hours` `6hours`
-  `12hours` `today` `yesterday` `1day` `3days` `1week` `2weeks` `1month` `3months`
-  `6months` `1year`。
-  **也接受任意数值写法**：`7days`、`24hours`、`90days`、`1d`、`30min`、`2mo` ——
-  底层 Everything 本来就支持 `last<N><单位>`，上面的名单只是便捷别名，
-  `7days` 和 `1week` 是同一个窗口。或直接写原始语法 `last2hours`。真正的垃圾值才会被拒绝。
-- `extensions`：`py,js,ts` 或 `py;js;ts` 都行。
-- `auto_expand`：默认 true。窗口内结果太少时**自动放宽到全部时间**。
-- **注意回传的 `requested_period` / `effective_period` / `expanded`** ——
-  `expanded: true` 说明结果**不是**那个时间窗内的，别当成"最近 24 小时的变化"。
-- **结果按修改时间倒序，所以"未来时间戳"的文件永远排最前。** 有些文件被故意设成
-  2098-01-01 之类（打包/破解软件常见），Everything 的 `dm:last*` 是"从 X 之前到现在"
-  的开区间，未来时间也满足，于是它们会霸占"最近改动"的前几条。
-  看到这种时间戳直接**跳过或明确说明**，不要当成"刚改过"；需要真实近期改动时用
-  `everything_search` 配 `dm:last7days` 并自己过滤掉未来时间。
-
-## `everything_file_details`
-
-- `paths`：1–20 个路径，**必须绝对路径**。
-- `preview_lines`：0–200。文本文件的预览；`preview_truncated` 告诉你是否被截断。
-- `url`：这些路径在**哪台机器**上。**一次只能一台** —— 传多台会直接报错，
-  因为同一个路径在不同机器上是不同文件，混在一份回答里说不清描述的是哪台。
-  **不传 `url` 就是本机** —— 单台工具的默认是"本机"，不是"所有已打开的机器"，
-  所以别的机器登记着、甚至开着，都不影响这个工具。
-- **远程机器**（`url` 指向别的机器）时，回答的是**那台机器索引里的元数据**：
-  大小、修改时间是真的（Everything 存了），类型是按**扩展名**判的。
-  **没有文件头嗅探、没有预览** —— HTTP 接口给的是索引，不是文件内容。
-  文本形式会写 `preview: unavailable`，结构化里是 `resolved_from: "index"` 加
-  `preview_unavailable`。**要读内容必须在那台机器上读**，别在这边猜。
-- **"索引里没有"不等于"文件不存在"**：Everything 只索引它被指到的 NTFS 卷，
-  网络盘和被排除的目录根本不在索引里。工具会这样说明，不要把它当成"文件已删除"。
-
-## `everything_count_stats`
-
-- `count` 精确、`total_size`/`breakdown` 采样（见上）。
-- **`count: 0` 是确定的"没有"，不是"没取到"** —— 它来自 Everything 索引的精确计数，
-  与取多少行无关，也**不受采样影响**。所以**不要再用递归扫盘去复核一个 0**：
-  本机 `D:\Projects` 递归枚举一次要 **228 秒**（275,434 个目录），
-  而索引回答同一个问题只要几毫秒。0 看起来像"空结果"，但这两个 0 不是一回事。
-- `sample_sort`：**开了 breakdown 时不能用 `name`**（文件名排序与扩展名相关，会带偏采样）。
-- `category` / `entry_type` / `path` 都可用来限定。
-- 想按"盘"分布时，索引没有现成的分组，只能每个盘各查一次（`path=D:\` 等）；
-  非 NTFS 的盘（exFAT/FAT/网络盘）**不在索引里**，要单独说明或单独扫。
-
-## 排序值（14 种）
-
-`name` `name-desc` `path` `path-desc` `size` `size-asc` `size-desc`
-`date-modified` `date-modified-asc` `date-modified-desc`
-`date-created` `date-created-asc` `date-created-desc` `extension`
-
-非法排序值会被拒绝（不会静默回退）。
-
-## 大小写 / 全词 / 精确：优先用**函数**，不要用参数
-
-Everything 有一组**匹配修饰函数**，直接写在 `query` 里，**所有工具都自动支持**
-（`count_stats`、`find_recent`、`batch` 都能用），因为它们属于查询串，不走 HTTP 参数那条路：
-
-| 函数 | 作用 | 本机实测（`README` / `read`） |
-|---|---|---|
-| `case:` | 大小写敏感 | `README` 67964 → `case:README` **44675** |
-| `nocase:` | 显式不敏感（默认） | `nocase:README` 67964 |
-| `wholeword:` / `ww:` | 全词匹配 | `read` 141836 → `wholeword:read` **7574** |
-| `exact:` | 精确匹配整个名字 | `exact:README` 4164 |
-
-```text
-case:README                     # 只有大写 README
-wholeword:read                  # read 不匹配 thread / already / spread
-path:D:\src wholeword:read      # 和 path 函数正常组合
-case:README regex:^README       # 和正则也能共存（函数在 regex: 前后都行）
-```
-
-`case:` 与 HTTP 的 `&case=1` 实测**结果完全相同**（都是 44675），而且函数优先级更高 ——
-`case:README` 同时传 `&case=0` 仍然是 44675。
-
-> **那 `match_case` / `match_whole_word` 参数什么时候还要用？**
-> **只有正则查询需要。** 正则模式下整串会被当成模式解析，函数边界不再可靠，
-> 所以 `everything_search(query="^README\.md$", match_regex=true, match_case=true)`
-> 是唯一必须走参数的组合。非正则场景请一律用函数 —— 它跨工具通用。
->
-> 无论走哪条路，**回传的 `match_modes` 都会告诉你哪些标志真的生效了**。
 
 ## 常用 Everything 语法
 
@@ -355,20 +90,6 @@ case:README                   # 大小写敏感（见上一节，所有工具通
 wholeword:read                # 全词匹配
 ```
 
-## 文件类别覆盖的扩展名
-
-| 类别 | 扩展名 |
-|---|---|
-| `audio` | mp3 wav flac aac ogg wma m4a opus aiff alac |
-| `video` | mp4 avi mkv mov wmv flv webm m4v mpeg mpg 3gp ts |
-| `image` | jpg jpeg png gif bmp svg webp tiff tif ico raw heic heif avif psd |
-| `document` | pdf doc docx xls xlsx ppt pptx odt ods odp rtf txt md epub pages numbers key |
-| `code` | py js ts jsx tsx c cpp h hpp cs java go rs rb php swift kt scala r lua sh bash ps1 bat cmd sql html css scss sass less vue svelte dart zig nim hx ex exs erl hs ml fs clj lisp asm toml yaml yml json xml ini cfg conf env dockerfile makefile cmake gradle sbt proto graphql tf hcl |
-| `archive` | zip rar 7z tar gz bz2 xz tgz zst lz4 cab iso dmg |
-| `executable` | exe msi dll sys com scr appx msix |
-| `font` | ttf otf woff woff2 eot fon |
-| `3d` | obj fbx stl blend dae 3ds gltf glb usd usda usdz step iges |
-| `data` | csv tsv json jsonl ndjson xml sqlite db mdb accdb parquet arrow avro hdf5 feather |
 
 ## 最佳实践
 
@@ -441,28 +162,9 @@ wholeword:read                # 全词匹配
   清掉幽灵：在那个路径上做一次干净的"创建 + 删除"即可（新 inode、无其它链接）。
 - **NTFS 之外**：exFAT/FAT/网络盘没有 MFT，Everything 只能慢速扫描，结果可能不全。
 
-## 无 MCP 时的用法（pi 等纯 CLI harness）
 
-这类 harness 没有 MCP 工具，但有 bash。改用 Everything 命令行 `es.exe`：
+## 更多
 
-```bash
-ES="/c/Users/AlwaysTS/AppData/Local/Everything/es.exe"
-"$ES" -path "D:\proj" "ext:py;md"                                # 秒级列候选
-"$ES" -path "D:\llm" "ext:gguf" -sort size-descending | head -5  # 按大小取 Top-N
-"$ES" -path "D:\llm" "size:>10gb"                                # 按大小过滤
-"$ES" -path "D:\llm" "dm:today"                                  # 今天修改过
-```
-
-**两个实测坑（2026-09-28）**：
-
-1. **`-sort` 不要和 `-n` 同用**：`-n` 在排序之前就截断，会漏掉真正最大的文件
-   （实测漏掉了 28.5 GB 的最大模型，只返回 27.2/20.2/14 GB）。排序后只用管道截断：
-   `... -sort size-descending | head -N`。
-2. 扩展名过滤用 Everything 搜索语法 `ext:gguf`，**没有 `-ext` 参数**
-   （`-ext gguf` 会被忽略，结果里混进 .cpp/.py 等无关文件）。
-
-完整性说明：Everything 依赖索引，若怀疑索引滞后（刚创建/移动的大文件），
-用 `find` 或 `Get-ChildItem -Recurse` 做一次实时校验。
-
-**取 Top-N 的可靠两步法**：先用 `es.exe` 快速列候选（毫秒级），
-再用 `stat`/`ls -l` 核实大小并排序，可完全避开上面的排序坑。
+- `REFERENCE.md`：配置 MCP、CLI 模式、远程多机搜索、参数平铺与拼写报错、`effective_query`、
+  `find_recent` / `file_details` / `count_stats` 细节、排序值、函数 vs 参数实测、类别扩展名表、pi 用法
+- `INSTALL.md`：安装与配置排错

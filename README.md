@@ -19,9 +19,21 @@ mcp__everything-search__everything_search_batch
 
 ## Install
 
+There are two things you can install, and you probably want one of them:
+
+| Archive | What is inside | When |
+|---|---|---|
+| `everything-search-skill-<v>.zip` | `everything-search-mcp.exe` + `SKILL.md` + `REFERENCE.md` + `INSTALL.md` + `README.md` + `LICENSE` | the normal case: a client spawns the executable over stdio |
+| `everything-search-plugin-<v>.zip` | `everything_search_mcp64.dll` + `install-plugin.ps1` + `PLUGIN.md` | you want the endpoint to live inside Everything itself |
+
+Both are produced by `.\release.ps1`, which builds and packs them into `dist\`.
+The plugin archive ships the DLL prebuilt on purpose: everything it needs is
+described on this page, but the one thing a user cannot be expected to do is
+install a Rust toolchain to run a file search plugin.
+
 **1. Get the binary.** Download `everything-search-mcp.exe` from
 [Releases](https://github.com/alwaysmy/everything-search-mcp/releases), or grab
-`everything-search-skill.zip`, which is the binary plus the agent-facing skill
+`everything-search-skill-<v>.zip`, which is the binary plus the agent-facing skill
 that explains how to use the tools well.
 
 **2. Point your clients at it.** The executable knows its own absolute path, so
@@ -50,6 +62,67 @@ Everything's HTTP server enabled on port `23333`
 > allow_file_download=0
 > ```
 
+## Living inside Everything (optional)
+
+The same server also runs *inside* Everything. This repository builds a plugin DLL
+that Everything 1.5 loads into its own process and that binds a loopback MCP
+endpoint there, so the endpoint exists exactly as long as Everything does —
+nothing to supervise, nothing to respawn after a reboot, no orphan stdio children.
+
+Tool calls do not change: they go through the same `everything::Client` over
+Everything's HTTP server. The plugin adds a transport, not a second query path,
+and the stdio executable remains the right choice for clients that only speak
+stdio, for one-shot CLI use, and as a fallback when the plugin is not installed.
+
+### Install
+
+From a checkout, or from the `everything-search-plugin-<v>.zip` archive (it has no
+`Cargo.toml`, so the installer uses the DLL sitting next to it instead of trying
+to build). `PLUGIN.md` in the same folder is the long form: requirements,
+registration table, uninstall, port changes, troubleshooting.
+
+```powershell
+.\install-plugin.ps1                    # build, install, restart Everything, verify
+.\install-plugin.ps1 -NoBuild -NoRestart  # register only
+```
+
+Run it from an elevated PowerShell — the third-party allowlist is under `HKLM`.
+Registration is a file-and-registry job, so it needs no clicking through menus:
+
+| Where | What it holds |
+|---|---|
+| `Plugins\everything_search_mcp64.dll` | the module Everything loads |
+| `Everything.ini` → `plugin_filename`, `plugin_enabled` | load list, one enabled flag per entry, same order |
+| `Plugins.ini` → `[everything_search_mcp64.dll] enabled=1` | start the plugin |
+| `HKLM\SOFTWARE\voidtools\Everything` → `AllowedPlugins` | third-party allowlist |
+
+Two details decide whether it loads at all:
+
+* Everything will not load an unsigned DLL unless its file name is in
+  `AllowedPlugins`, and it says nothing when it refuses — the module simply never
+  appears in the process.
+* `AllowedPlugins` is **semicolon**-separated. A comma-joined list disables every
+  entry in it, including the ones that worked before.
+
+The restart has to be a real exit and start: Everything only loads plugins at
+startup. `install-plugin.ps1` issues the exit, edits the files, then starts
+Everything with `-startup`, which keeps the window out of the foreground.
+
+### Point a client at it
+
+```json
+{
+  "serverName": "everything-search-http",
+  "transport": "streamable-http",
+  "url": "http://127.0.0.1:8286/mcp"
+}
+```
+
+`8286` is the default port; `EVERYTHING_MCP_PORT` overrides it for a host started
+with a different value. The endpoint answers JSON-RPC `initialize`, `tools/list`
+and `tools/call` over `POST /` or `POST /mcp`, with `text/event-stream` responses
+when the client asks for them.
+
 ## Why it is fast
 
 Everything is reached over its built-in HTTP server rather than through `es.exe`,
@@ -70,7 +143,7 @@ Against the original Python implementation, same query and machine:
 |---|---:|---:|---|
 | MCP `tools/call` round trip | 134.0 ms | **0.53 ms** | 251× |
 | Cold start (spawn + `initialize`) | 1681 ms | **5 ms** | 336× |
-| Distribution size | interpreter + deps | **~580 KB** | — |
+| Distribution size | interpreter + deps | **~840 KB** | — |
 
 Dropping the interpreter buys one order of magnitude; the transport change buys
 the rest.
@@ -345,7 +418,7 @@ client that greps the body for `"Error:"` would need updating.
 
 ```powershell
 cargo build --release      # -> target\release\everything-search-mcp.exe
-cargo test                 # 29 unit tests
+cargo test                 # 55 unit + 8 integration tests
 .\deploy.ps1               # build, then install into the skill dir + hard-link onto PATH
 .\deploy.ps1 -NoBuild      # deploy what is already built
 ```
@@ -369,7 +442,7 @@ src/
   cli.rs        one-shot search/recent/count/details/servers, so the exe works with no MCP
   setup.rs      `config`: emit or apply the client configuration for this exe
 skills/
-  everything-search/   the agent-facing skill (SKILL.md + INSTALL.md)
+  everything-search/   the agent-facing skill (SKILL.md + REFERENCE.md + INSTALL.md)
 TEST_SCRIPTS/
   compare-single-backend.ps1   single-instance regression check against a git baseline
   mock-http-smoke.py            isolated CLI/MCP parity and optional schema validation

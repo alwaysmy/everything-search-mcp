@@ -6,24 +6,23 @@
 //!
 //! Answers come from voidtools Everything's index over its loopback HTTP server.
 //! No `es.exe` subprocess, no SDK DLL, no Python runtime.
-
-mod cli;
-mod everything;
-mod filetype;
-mod jsonrpc;
-mod servers;
-mod setup;
-mod tools;
+//!
+//! The same implementation also ships as an Everything 1.5 plugin (`src/plugin/`),
+//! where Everything loads it in-process and the MCP endpoint is served from there.
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(code) = cli::dispatch(&argv) {
+    if let Some(code) = everything_mcp_core::cli::dispatch(&argv) {
         std::process::exit(code);
     }
 
     // No arguments: an MCP session on stdin/stdout.
-    let client = everything::Client::new(everything::Config::from_env());
-    if let Err(e) = jsonrpc::serve(tools::Tools::new(client)) {
+    let client = everything_mcp_core::everything::Client::new(
+        everything_mcp_core::everything::Config::from_env(),
+    );
+    if let Err(e) =
+        everything_mcp_core::jsonrpc::serve(everything_mcp_core::tools::Tools::new(client))
+    {
         eprintln!("everything-search-mcp: {e}");
         std::process::exit(1);
     }

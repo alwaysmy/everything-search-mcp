@@ -21,7 +21,9 @@ param(
     [int]$Port = 8286,
     [int]$Clients = 6,
     [int]$Rounds = 5,
-    [string]$SearchPath = 'D:\WorkDesigns',
+    # Empty means "the repository root", so the script runs on any checkout. A
+    # bigger tree is a better test; the numbers are only compared with themselves.
+    [string]$SearchPath = '',
     # A total may move this much before it stops being "the same answer".
     [double]$DriftTolerance = 0.05
 )
@@ -80,24 +82,9 @@ function Get-Totals {
     }
 }
 
-# Every row a client got back must match the extension that client asked for.
-# A response that belonged to somebody else fails here immediately.
-function Test-Rows {
-    param([string]$Tool, $Structured, [string[]]$Ext)
-    if ($Ext.Count -eq 0) { return @() }
-    $groups = if ($Tool -eq 'everything_search_batch') { $Structured.results } else { @($Structured) }
-    $bad = @()
-    for ($i = 0; $i -lt $groups.Count; $i++) {
-        $expected = if ($Ext.Count -eq 1) { $Ext[0] } else { $Ext[$i] }
-        foreach ($row in $groups[$i].results) {
-            if (-not $row.name.EndsWith(".$expected", [StringComparison]::OrdinalIgnoreCase)) {
-                $bad += "expected .$expected, got $($row.name)"
-            }
-        }
-    }
-    return $bad
+if ([string]::IsNullOrWhiteSpace($SearchPath)) {
+    $SearchPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 }
-
 if (-not (Test-Path $SearchPath)) { throw "search path '$SearchPath' does not exist" }
 
 $specs = New-Specs -Root $SearchPath

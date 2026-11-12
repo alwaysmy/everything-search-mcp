@@ -15,7 +15,9 @@
 # one, which means something serialized the tool layer again.
 param(
     [int]$Port = 8286,
-    [string]$SlowPath = 'D:\WorkDesigns',
+    # Empty means "the repository root", so the script runs on any checkout
+    # without being told where it lives. Point it at a big tree for a heavier read.
+    [string]$SlowPath = '',
     [int]$FastCalls = 3,
     # A fast call may take this multiple of its solo latency before we call it
     # blocked. Absolute floor keeps a 1 ms solo measurement from failing on noise.
@@ -25,6 +27,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $endpoint = "http://127.0.0.1:$Port/mcp"
+
+if ([string]::IsNullOrWhiteSpace($SlowPath)) {
+    $SlowPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+}
+if (-not (Test-Path $SlowPath)) { throw "slow-query path '$SlowPath' does not exist" }
 
 function Invoke-Tool {
     param([string]$Name, [hashtable]$Arguments)

@@ -68,7 +68,7 @@ function Get-EverythingExe([string]$Hint) {
         if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
         throw "no Everything.exe at $candidate"
     }
-    $running = Get-Process Everything -ErrorAction SilentlyContinue |
+    $running = Get-Process -Name Everything, Everything64 -ErrorAction SilentlyContinue |
         Where-Object { $_.Path } | Select-Object -First 1
     if ($running) { return $running.Path }
     foreach ($dir in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
@@ -189,8 +189,14 @@ if (-not (Test-Elevated)) {
 $exe = Get-EverythingExe $EverythingDir
 $everythingDir = Split-Path $exe
 $pluginsDir = Join-Path $everythingDir 'Plugins'
-$ini = Join-Path $everythingDir 'Everything.ini'
-$pluginIni = Join-Path $everythingDir 'Plugins.ini'
+# Everything writes its settings next to the user profile for a normal install and
+# next to the exe only for a portable one. Editing the wrong copy looks like the
+# plugin was never registered, because Everything rewrites the real one on exit.
+$dataDir = $everythingDir
+$appDataIni = Join-Path $env:APPDATA 'Everything\Everything.ini'
+if (Test-Path $appDataIni) { $dataDir = Split-Path $appDataIni }
+$ini = Join-Path $dataDir 'Everything.ini'
+$pluginIni = Join-Path $dataDir 'Plugins.ini'
 Write-Host "host    $exe"
 
 # The release archive has no Cargo.toml: there is nothing to build, and asking a

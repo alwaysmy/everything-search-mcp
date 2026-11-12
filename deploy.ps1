@@ -90,6 +90,28 @@ if (Test-Path $skillMdSrc) {
     }
 }
 
+# Same treatment for the other docs that belong to the skill: without this they
+# stay at whatever version was installed last, and the deployed skill documents
+# less than the repo does (`REFERENCE.md` would never arrive at all).
+foreach ($doc in 'REFERENCE.md', 'INSTALL.md') {
+    $docSrc = Join-Path $root "skills\everything-search\$doc"
+    if (-not (Test-Path $docSrc)) { continue }
+    $docDst = Join-Path $SkillDir $doc
+    $docInStep = $false
+    if (Test-Path $docDst) {
+        try {
+            $docInStep = (Get-FileHash $docDst -Algorithm SHA256).Hash -eq
+                         (Get-FileHash $docSrc -Algorithm SHA256).Hash
+        } catch { $docInStep = $false }
+    }
+    if ($docInStep) {
+        Write-Host "skill   $docDst (already in step)"
+    } else {
+        Copy-Item $docSrc $docDst -Force
+        Write-Host "skill   $docDst"
+    }
+}
+
 if (Test-Path $BinDir) {
     foreach ($name in 'everything-search-mcp.exe', 'everything-mcp.exe') {
         $dst = Join-Path $BinDir $name

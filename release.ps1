@@ -64,6 +64,7 @@ try {
     $skill = Stage 'skill'
     Copy-Item $exe (Join-Path $skill 'everything-search-mcp.exe')
     Copy-Item (Join-Path $root 'skills\everything-search\SKILL.md') $skill
+    Copy-Item (Join-Path $root 'skills\everything-search\REFERENCE.md') $skill
     Copy-Item (Join-Path $root 'skills\everything-search\INSTALL.md') $skill
     Copy-Item (Join-Path $root 'README.md') $skill
     Copy-Item (Join-Path $root 'LICENSE') $skill

@@ -13,9 +13,13 @@
 //! * No separately supervised process — the endpoint exists exactly as long as
 //!   Everything does. Nothing to restart by hand after a reboot, no orphan stdio
 //!   children.
-//! * One tool implementation. The 14 tools, their schemas, their multi-instance
+//! * One tool implementation. The 5 tools, their schemas, their multi-instance
 //!   grouping and the remote `servers.json` registry are unchanged; only the front
 //!   door moves from stdin/stdout to a socket.
+//! * No shared server state. Each request builds its own [`Server`] over a copy of
+//!   the config, so a slow tool call cannot delay the ones arriving beside it
+//!   (the stdio front end is inherently one-at-a-time; the socket front end is
+//!   not, and must not simulate it with a lock).
 //! * No `db_*` main-thread problem. The host's database API may only be called on
 //!   Everything's main thread (off-thread calls crash the host with `0xC0000005`),
 //!   so it is deliberately unused here. A faster `db_*` path for the handful of
@@ -44,7 +48,7 @@ use crate::everything::{Client, Config};
 use crate::jsonrpc::Server;
 use crate::tools::Tools;
 
-use server::{Endpoint, SharedServer};
+use server::{Endpoint, HandlerFactory};
 
 // `EVERYTHING_PLUGIN_PM_*` (everything_plugin.h, lines 203-221).
 const PM_INIT: u32 = 1;
@@ -80,11 +84,15 @@ fn endpoint_slot() -> &'static Mutex<Option<Endpoint>> {
     ENDPOINT.get_or_init(|| Mutex::new(None))
 }
 
-/// The MCP server state this plugin serves: the crate's tool layer over the normal
-/// HTTP backend. Exposed so tests can drive the same wiring without the host.
-pub fn shared_handler() -> SharedServer {
-    let client = Client::new(Config::from_env());
-    Arc::new(Mutex::new(Server::new(Tools::new(client))))
+/// The MCP handler factory this plugin serves: the crate's tool layer over the
+/// normal HTTP backend. One server is built per request, so concurrent calls do
+/// not queue behind a slow one. Exposed so tests can drive the same wiring without
+/// the host.
+pub fn shared_handler() -> HandlerFactory {
+    Arc::new(|| {
+        let client = Client::new(Config::from_env());
+        Server::new(Tools::new(client))
+    })
 }
 
 /// Start (or restart) the MCP endpoint on `port`; `0` lets the OS choose.

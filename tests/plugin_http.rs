@@ -195,6 +195,139 @@ fn reuses_a_connection_for_several_requests() {
     endpoint.stop();
 }
 
+/// `Expect: 100-continue` is a handshake, not a header to ignore: a client that
+/// sends it waits for the interim response before sending the body. Answering
+/// nothing would leave it waiting until it times out.
+#[test]
+fn answers_expect_100_continue_before_the_body() {
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let head = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAccept: application/json\r\nExpect: 100-continue\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.write_all(head.as_bytes()).expect("write head");
+
+    let (status, _, _) = read_response(&mut stream);
+    assert_eq!(status, 100, "server did not answer the continue handshake");
+
+    stream.write_all(body.as_bytes()).expect("write body");
+    let (status, _, response) = read_response(&mut stream);
+    assert_eq!(status, 200, "request after continue failed: {response}");
+
+    endpoint.stop();
+}
+
+/// A chunked body read by a Content-Length-only parser looks like no body at all.
+/// Refusing it at the door is the difference between a clear 411 and a confusing
+/// "empty body" from the JSON-RPC layer.
+#[test]
+fn refuses_chunked_request_bodies() {
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(
+            b"POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+        )
+        .expect("write chunked request");
+    let (status, _, body) = read_response(&mut stream);
+    assert_eq!(
+        status, 411,
+        "expected 411 for chunked body, got {status}: {body}"
+    );
+
+    endpoint.stop();
+}
+
+/// Keep-alive turns every idle socket into a held thread, and this code runs
+/// inside Everything.exe. The cap is what keeps that from becoming a way to stall
+/// the file manager; the refusal has to be a real answer, not a hang.
+#[test]
+fn refuses_connections_beyond_the_limit() {
+    use std::time::Duration;
+
+    let mut endpoint = Endpoint::start_with(0, shared_handler(), 2, Duration::from_secs(5))
+        .expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let held: Vec<TcpStream> = (0..2)
+        .map(|_| TcpStream::connect(("127.0.0.1", port)).expect("connect"))
+        .collect();
+    // Slots are taken at accept, so connecting is enough to fill them.
+    std::thread::sleep(Duration::from_millis(200));
+
+    let mut extra = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let (status, head, body) = read_response(&mut extra);
+    assert_eq!(
+        status, 503,
+        "expected a refusal, got {status}: {head} {body}"
+    );
+
+    // Releasing a slot must let the next client in.
+    drop(held);
+    std::thread::sleep(Duration::from_millis(300));
+    let mut after = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\n\r\n{ping}",
+        ping.len()
+    );
+    after
+        .write_all(request.as_bytes())
+        .expect("write after release");
+    let (status, _, body) = read_response(&mut after);
+    assert_eq!(status, 200, "slot was not released: {body}");
+
+    endpoint.stop();
+}
+
+/// An idle kept-alive connection must actually go away, otherwise a client that
+/// closed its side uncleanly leaves a thread behind for as long as the process
+/// lives.
+#[test]
+fn closes_an_idle_kept_alive_connection() {
+    use std::time::{Duration, Instant};
+
+    let mut endpoint = Endpoint::start_with(0, shared_handler(), 8, Duration::from_millis(200))
+        .expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\n\r\n{ping}",
+        ping.len()
+    );
+    stream.write_all(request.as_bytes()).expect("write request");
+    let (status, head, _) = read_response(&mut stream);
+    assert_eq!(status, 200);
+    assert!(head.to_ascii_lowercase().contains("connection: keep-alive"));
+
+    // The server closes after its idle window; observe the socket going away.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut tail = [0u8; 1];
+    loop {
+        match stream.read(&mut tail) {
+            Ok(0) => break,
+            Ok(_) => panic!("server sent data on an idle connection"),
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "idle connection was not closed: {error}"
+                );
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    endpoint.stop();
+}
+
 /// Regression guard for head-of-line blocking, as a barrier rather than a
 /// stopwatch: request A's handler refuses to return until request B's handler
 /// releases it. With one shared `Server` behind a mutex, B is never dispatched,

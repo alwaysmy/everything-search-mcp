@@ -11,7 +11,7 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -36,6 +36,50 @@ const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a connection may sit idle between requests before it is closed.
+///
+/// Keep-alive means an idle connection pins its thread, and this code runs inside
+/// `Everything.exe`. Five seconds is long enough to cover the gap between tool
+/// calls in one agent turn and short enough that a forgotten connection does not
+/// hold anything for long.
+const KEEP_ALIVE_IDLE: Duration = Duration::from_secs(5);
+
+/// Connections served at once, idle ones included.
+///
+/// Thread-per-connection is fine for a tool endpoint only while the count is
+/// bounded: 100 idle sockets were measured holding 100 threads inside the host.
+/// Past this limit new connections are refused with `503` rather than queued.
+const MAX_CONNECTIONS: usize = 64;
+
+/// Admission limits for one endpoint.
+///
+/// Kept per endpoint rather than global so a test can run with two slots and a
+/// 200 ms idle window without changing what any other endpoint does.
+struct Limits {
+    open: AtomicUsize,
+    max_connections: usize,
+    idle: Duration,
+}
+
+impl Limits {
+    fn new(max_connections: usize, idle: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            open: AtomicUsize::new(0),
+            max_connections,
+            idle,
+        })
+    }
+}
+
+/// Holds one connection slot until that connection's thread ends.
+struct ConnSlot(Arc<Limits>);
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        self.0.open.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// A running endpoint. Dropping it stops the listener thread.
 pub struct Endpoint<H: Handler + Send + 'static> {
     addr: SocketAddr,
@@ -50,13 +94,25 @@ impl<H: Handler + Send + 'static> Endpoint<H> {
     /// Bind `127.0.0.1:port` and start accepting. Port `0` asks the OS for a free
     /// port; the chosen one is available from [`Endpoint::addr`].
     pub fn start(port: u16, handler: HandlerFactory<H>) -> std::io::Result<Self> {
+        Self::start_with(port, handler, MAX_CONNECTIONS, KEEP_ALIVE_IDLE)
+    }
+
+    /// [`Endpoint::start`] with the admission limits spelled out. Tests use this
+    /// to exercise the caps without opening 64 sockets or waiting five seconds.
+    pub fn start_with(
+        port: u16,
+        handler: HandlerFactory<H>,
+        max_connections: usize,
+        idle: Duration,
+    ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_in_thread = Arc::clone(&stop);
+        let limits = Limits::new(max_connections, idle);
         let thread = std::thread::Builder::new()
             .name("everything-mcp-http".into())
-            .spawn(move || accept_loop(listener, stop_in_thread, handler))?;
+            .spawn(move || accept_loop(listener, stop_in_thread, handler, limits))?;
         Ok(Self {
             addr,
             stop,
@@ -91,20 +147,38 @@ fn accept_loop<H: Handler + Send + 'static>(
     listener: TcpListener,
     stop: Arc<AtomicBool>,
     handler: HandlerFactory<H>,
+    limits: Arc<Limits>,
 ) {
     loop {
         match listener.accept() {
-            Ok((stream, _peer)) => {
+            Ok((mut stream, _peer)) => {
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
+                // Take a slot before spawning: the thread is the thing being
+                // bounded, and a refused connection costs one write and no thread.
+                if limits.open.fetch_add(1, Ordering::SeqCst) >= limits.max_connections {
+                    limits.open.fetch_sub(1, Ordering::SeqCst);
+                    let _ = write_plain(
+                        &mut stream,
+                        503,
+                        "Service Unavailable",
+                        "too many connections",
+                        false,
+                    );
+                    continue;
+                }
+                let slot = ConnSlot(Arc::clone(&limits));
+                let idle = limits.idle;
                 let handler = Arc::clone(&handler);
                 // One short-lived thread per request: the backend call is what
                 // takes time, and it already runs in parallel.
                 let _ = std::thread::Builder::new()
                     .name("everything-mcp-conn".into())
                     .spawn(move || {
-                        let _ = handle_connection(stream, handler);
+                        // Dropped with the thread, releasing the connection slot.
+                        let _slot = slot;
+                        let _ = handle_connection(stream, handler, idle);
                     });
             }
             Err(_) => {
@@ -123,6 +197,10 @@ struct Request {
     path: String,
     accept: String,
     keep_alive: bool,
+    /// `Transfer-Encoding: chunked`. Not implemented — refused with 411 rather
+    /// than mis-read as an empty body, which is what a Content-Length-only parser
+    /// would do.
+    chunked: bool,
     body: Vec<u8>,
 }
 
@@ -144,6 +222,10 @@ impl Conn {
             stream,
             buf: Vec::with_capacity(4096),
         }
+    }
+
+    fn set_read_timeout(&mut self, timeout: Duration) {
+        let _ = self.stream.set_read_timeout(Some(timeout));
     }
 
     fn read_request(&mut self) -> std::io::Result<Request> {
@@ -179,6 +261,8 @@ impl Conn {
         let mut content_length = 0usize;
         let mut accept = String::new();
         let mut connection = String::new();
+        let mut transfer_encoding = String::new();
+        let mut expect = String::new();
         for line in lines {
             let Some((name, value)) = line.split_once(':') else {
                 continue;
@@ -189,8 +273,19 @@ impl Conn {
                 "content-length" => content_length = value.parse().unwrap_or(0),
                 "accept" => accept = value.to_ascii_lowercase(),
                 "connection" => connection = value.to_ascii_lowercase(),
+                "transfer-encoding" => transfer_encoding = value.to_ascii_lowercase(),
+                "expect" => expect = value.to_ascii_lowercase(),
                 _ => {}
             }
+        }
+        let chunked = transfer_encoding.contains("chunked");
+
+        // A client that asked for `100 Continue` is waiting for this line before
+        // it sends the body. Without it the server would sit in read() until the
+        // client gives up, which looks like a hang rather than a protocol error.
+        if expect.contains("100-continue") && content_length > 0 && !chunked {
+            self.stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+            self.stream.flush()?;
         }
         if content_length > MAX_BODY {
             return Err(std::io::Error::new(
@@ -228,6 +323,7 @@ impl Conn {
             path,
             accept,
             keep_alive,
+            chunked,
             body,
         })
     }
@@ -242,6 +338,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn handle_connection<H: Handler + Send + 'static>(
     stream: TcpStream,
     handler: HandlerFactory<H>,
+    idle: Duration,
 ) -> std::io::Result<()> {
     let mut conn = Conn::new(stream);
 
@@ -259,6 +356,10 @@ fn handle_connection<H: Handler + Send + 'static>(
         if !handle_one(&mut conn, request, &handler)? {
             return Ok(());
         }
+        // The first request gets the generous timeout (a client that connected
+        // but is slow to speak); once served, the connection is only worth
+        // holding while the client is actively using it.
+        conn.set_read_timeout(idle);
     }
 }
 
@@ -269,6 +370,19 @@ fn handle_one<H: Handler + Send + 'static>(
     handler: &HandlerFactory<H>,
 ) -> std::io::Result<bool> {
     let stream = &mut conn.stream;
+
+    // Refuse a framing this server cannot read, instead of treating the body as
+    // empty and answering "empty body" three layers later.
+    if request.chunked {
+        let _ = write_plain(
+            stream,
+            411,
+            "Length Required",
+            "chunked request bodies are not supported; send Content-Length",
+            false,
+        );
+        return Ok(false);
+    }
 
     // MCP endpoint sits at "/" and "/mcp"; everything else is a 404.
     if request.path != "/" && request.path != "/mcp" {

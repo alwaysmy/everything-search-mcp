@@ -70,6 +70,19 @@ handshake, which was the single largest piece of this endpoint's overhead
 (~0.47 ms of a ~0.62 ms console round trip). `Connection: close` is honored, and
 HTTP/1.0 defaults to closing, both per spec.
 
+That has a cost worth stating, because this thread runs inside `Everything.exe`:
+
+| Bound | Value | Why |
+|---|---|---|
+| idle close | 5 s after a response | a kept-alive socket pins a thread; 100 idle sockets were measured holding 100 threads in the host |
+| concurrent connections | 64 | past it, new ones get `503` immediately instead of queueing |
+| first-request timeout | 30 s | a client that connects and never speaks still holds a slot, but only for that long |
+
+Two framing details, both deliberately refused rather than guessed at:
+`Transfer-Encoding: chunked` gets `411` (a Content-Length-only parser would read
+it as an empty body), and `Expect: 100-continue` is answered before the body is
+awaited, because a client that sends it waits for that line.
+
 ## Verify by hand
 
 ```powershell

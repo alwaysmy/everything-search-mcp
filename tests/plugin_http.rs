@@ -4,7 +4,7 @@
 //! This needs Everything's HTTP server for nothing — `initialize` and `tools/list`
 //! are answered by the tool layer alone, so the test also runs on a machine where
 //! Everything is not running. A `tools/call` smoke test lives in
-//! `tests/live_search.rs`, which does require the real index.
+//! the live scripts under `TEST_SCRIPTS\`, which do require the real index.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -326,6 +326,133 @@ fn closes_an_idle_kept_alive_connection() {
     }
 
     endpoint.stop();
+}
+
+/// A request the parser cannot honour must get a status line, not a silent close.
+/// "Connection reset" with no body is the failure mode this whole endpoint exists
+/// to avoid looking like.
+#[test]
+fn refuses_what_it_cannot_parse_with_a_status() {
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    // Body larger than MAX_BODY.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(
+            b"POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 300000\r\n\r\n",
+        )
+        .expect("write oversized head");
+    let (status, _, _) = read_response(&mut stream);
+    assert_eq!(status, 413, "expected 413 for an oversized body");
+
+    // Content-Length that is not a number.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(b"POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: nope\r\n\r\n")
+        .expect("write bad content-length");
+    let (status, _, _) = read_response(&mut stream);
+    assert_eq!(status, 400, "expected 400 for a bad Content-Length");
+
+    endpoint.stop();
+}
+
+/// Loopback is not an authorization boundary: without this, any web page can POST
+/// here with a non-JSON content type and no preflight.
+#[test]
+fn refuses_a_foreign_origin_and_a_non_json_body() {
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nOrigin: https://evil.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("write");
+    let (status, _, _) = read_response(&mut stream);
+    assert_eq!(status, 403, "expected 403 for a foreign Origin");
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("write");
+    let (status, _, _) = read_response(&mut stream);
+    assert_eq!(status, 415, "expected 415 for a non-JSON content type");
+
+    // A loopback Origin is the legitimate case and must still work.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("write");
+    let (status, _, reply) = read_response(&mut stream);
+    assert_eq!(status, 200, "loopback origin should be served: {reply}");
+
+    endpoint.stop();
+}
+
+/// Clients add query strings, and a proxy-configured client sends absolute-form
+/// targets. Both are the same endpoint.
+#[test]
+fn accepts_a_query_string_and_an_absolute_target() {
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+
+    for target in [
+        "/mcp?trace=1".to_string(),
+        format!("http://127.0.0.1:{port}/mcp"),
+    ] {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let request = format!(
+            "POST {target} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).expect("write");
+        let (status, _, reply) = read_response(&mut stream);
+        assert_eq!(status, 200, "{target} should be served: {reply}");
+    }
+
+    endpoint.stop();
+}
+
+/// stop() runs on Everything's main thread before the host may unload this DLL, so
+/// it must return promptly and must not leave a handler thread running.
+#[test]
+fn stop_with_a_live_connection_returns_promptly_and_frees_the_port() {
+    use std::time::{Duration, Instant};
+
+    let mut endpoint = Endpoint::start(0, shared_handler()).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.write_all(request.as_bytes()).expect("write");
+    let (status, _, _) = read_response(&mut stream);
+    assert_eq!(status, 200);
+    // The connection is now idle and kept alive: exactly the state a shutdown
+    // must be able to get out of.
+
+    let started = Instant::now();
+    endpoint.stop();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "stop() took {elapsed:?} with one idle connection"
+    );
+
+    // The port must be free again, or a restart after a host-initiated stop fails.
+    let rebound = std::net::TcpListener::bind(("127.0.0.1", port));
+    assert!(rebound.is_ok(), "port {port} was not released: {rebound:?}");
 }
 
 /// Regression guard for head-of-line blocking, as a barrier rather than a

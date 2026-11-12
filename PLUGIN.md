@@ -18,7 +18,7 @@ when Everything exits.
 |---|---|
 | Everything | 1.5 x64 (the 1.4 plugin API is different) |
 | HTTP server | enabled in Everything → Tools → Options → HTTP Server, port `23333` |
-| Administrator | only to write the plugin allowlist in `HKLM` |
+| Administrator | only to write the plugin allowlist in `HKLM` (the installer checks for elevation unconditionally today) |
 
 The plugin is unsigned, and **Everything refuses unsigned plugins that are not on
 its allowlist without logging anything** — the module simply never appears in the
@@ -41,7 +41,7 @@ From the repository root, in an elevated PowerShell:
 
 ```powershell
 .\install-plugin.ps1                     # build, install, restart Everything, verify
-.\install-plugin.ps1 -NoBuild            # install the DLL already in target\release
+.\install-plugin.ps1 -NoBuild            # install the DLL already in target\release (automatic in the release archive)
 .\install-plugin.ps1 -NoRestart          # register only; takes effect next restart
 .\install-plugin.ps1 -EverythingDir D:\Tools\Everything   # non-standard install
 ```
@@ -100,7 +100,7 @@ That has a cost worth stating, because this thread runs inside `Everything.exe`:
 |---|---|---|
 | idle close | 5 s after a response | a kept-alive socket pins a thread; 100 idle sockets were measured holding 100 threads in the host |
 | concurrent connections | 256 | past it, new ones get `503` immediately instead of queueing |
-| first-request timeout | 30 s | a client that connects and never speaks still holds a slot, but only for that long |
+| first-request timeout | 30 s of read inactivity | a client that connects and never speaks holds a slot for that long (it is a per-read timeout, not a total deadline) |
 
 The cap costs nothing while it is not reached — it is a counter, not a
 preallocation. What costs memory is the connections themselves: measured at

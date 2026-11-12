@@ -23,8 +23,8 @@ Cursor / VS Code 里已经存在的配置文件，并顺手探测 Everything 的
 # 不带 tag 就是取 latest，这样升级时这行不会过期
 gh release download --repo alwaysmy/everything-search-mcp `
   --pattern 'everything-search-mcp.exe' --dir '<本 skill 目录>\bin'
-# 或者直接下整个 skill 包：--pattern 'everything-search-skill.zip'
-# 钉版本：gh release download v0.3.2 --repo ... 
+# 或者直接下整个 skill 包：--pattern 'everything-search-skill-*.zip'
+# 钉版本：gh release download v<version> --repo ... 
 ```
 
 或浏览器打开 <https://github.com/alwaysmy/everything-search-mcp/releases>。

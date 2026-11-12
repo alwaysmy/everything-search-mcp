@@ -125,9 +125,14 @@ pub fn resolve(get: FnGetProcAddress) -> Result<(), &'static str> {
             version_get_text: required!(get, "version_get_text"),
         }
     };
-    PROCS
-        .set(table)
-        .map_err(|_| "plugin API already initialised")
+    // Idempotent: the host may send PM_INIT again on a plugin stop/start cycle
+    // without unloading the DLL, and refusing the second call would leave the
+    // plugin permanently unusable.
+    match PROCS.set(table) {
+        Ok(()) => Ok(()),
+        Err(_) if PROCS.get().is_some() => Ok(()),
+        Err(_) => Err("plugin API already initialised"),
+    }
 }
 
 /// Everything's version text, e.g. `1.5.0.1416b (x64)`.

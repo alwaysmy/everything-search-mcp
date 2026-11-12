@@ -12,7 +12,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -21,8 +21,14 @@ use serde_json::{json, Value};
 use crate::jsonrpc::Server;
 use crate::tools::Tools;
 
-/// The MCP server state, shared by every connection.
-pub type SharedServer = Arc<Mutex<Server<Tools>>>;
+/// Builds one MCP server per request.
+///
+/// The tool layer holds no state between calls (a `Tools` is a `Config` and
+/// nothing else), so a shared `Server` behind a mutex would buy nothing and cost
+/// head-of-line blocking: one slow `count_stats` would hold up every request that
+/// arrived beside it. A factory keeps concurrent calls independent, which is what
+/// Everything's own HTTP server already does one layer down.
+pub type HandlerFactory = Arc<dyn Fn() -> Server<Tools> + Send + Sync>;
 
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 4 * 1024 * 1024;
@@ -38,7 +44,7 @@ pub struct Endpoint {
 impl Endpoint {
     /// Bind `127.0.0.1:port` and start accepting. Port `0` asks the OS for a free
     /// port; the chosen one is available from [`Endpoint::addr`].
-    pub fn start(port: u16, handler: SharedServer) -> std::io::Result<Self> {
+    pub fn start(port: u16, handler: HandlerFactory) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -75,7 +81,7 @@ impl Drop for Endpoint {
     }
 }
 
-fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>, handler: SharedServer) {
+fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>, handler: HandlerFactory) {
     loop {
         match listener.accept() {
             Ok((stream, _peer)) => {
@@ -190,7 +196,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn handle_connection(mut stream: TcpStream, handler: SharedServer) -> std::io::Result<()> {
+fn handle_connection(mut stream: TcpStream, handler: HandlerFactory) -> std::io::Result<()> {
     let request = match read_request(&mut stream) {
         Ok(request) => request,
         Err(_) => {
@@ -246,7 +252,9 @@ fn handle_connection(mut stream: TcpStream, handler: SharedServer) -> std::io::R
 
     // One JSON-RPC message, or a batch of them.
     let replies: Vec<Value> = {
-        let mut server = handler.lock().unwrap_or_else(|poison| poison.into_inner());
+        // A fresh server for this request: nothing is shared, so a slow tool call
+        // cannot delay the requests arriving on other connections.
+        let mut server = handler();
         match parsed {
             Value::Array(messages) => messages
                 .iter()

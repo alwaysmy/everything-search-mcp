@@ -83,3 +83,44 @@ fn mcp_handshake_and_tool_list_over_loopback_http() {
     endpoint.stop();
 }
 
+/// Regression guard for head-of-line blocking: the endpoint must build a server
+/// per request. A shared `Server` behind a mutex made a slow `count_stats` delay
+/// every request that arrived beside it, which Everything's own HTTP server
+/// (one layer down) never does.
+#[test]
+fn every_request_builds_its_own_server() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use everything_mcp_core::everything::{Client, Config};
+    use everything_mcp_core::jsonrpc::Server;
+    use everything_mcp_core::plugin::server::HandlerFactory;
+    use everything_mcp_core::tools::Tools;
+
+    let built = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&built);
+    let factory: HandlerFactory = Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Server::new(Tools::new(Client::new(Config::from_env())))
+    });
+
+    let mut endpoint = Endpoint::start(0, factory).expect("bind endpoint");
+    let port = endpoint.addr().port();
+
+    for id in 1..=3 {
+        let (status, body) = http_post(
+            port,
+            &json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string(),
+        );
+        assert_eq!(status, 200, "ping {id}: {body}");
+    }
+
+    assert_eq!(
+        built.load(Ordering::SeqCst),
+        3,
+        "expected one server per request, not one shared server"
+    );
+
+    endpoint.stop();
+}
+

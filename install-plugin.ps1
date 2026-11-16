@@ -279,6 +279,37 @@ Write-Host "ini     $pluginIni  [$PluginName] enabled=1"
 $allowed = Add-AllowedPlugin $PluginName
 Write-Host "policy  AllowedPlugins=$allowed"
 
+# Everything's own HTTP port is configurable, and neither front end can guess it at
+# run time. Read it once here and record it where the server looks
+# (%APPDATA%\everything-search-mcp\config.json) - cheaper and far more reliable than
+# probing ports on every start.
+function Get-HttpServerUrl([string]$IniPath) {
+    if (-not (Test-Path $IniPath)) { return $null }
+    $inSection = $false
+    foreach ($line in (Get-Content $IniPath)) {
+        $text = $line.Trim()
+        if ($text -match '^\[(.+)\]$') {
+            $inSection = ($Matches[1] -eq 'http_server64.dll')
+            continue
+        }
+        if ($inSection -and $text -match '^port=(\d+)$') {
+            return "http://127.0.0.1:$($Matches[1])"
+        }
+    }
+    return $null
+}
+
+$httpUrl = Get-HttpServerUrl $pluginIni
+if ($httpUrl) {
+    $cfgDir = Join-Path $env:APPDATA 'everything-search-mcp'
+    $cfgPath = Join-Path $cfgDir 'config.json'
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    @{ http_url = $httpUrl } | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
+    Write-Host "http    $httpUrl  (recorded in $cfgPath)"
+} else {
+    Write-Host 'http    could not read the HTTP server port from Plugins.ini; the server will use its default (23333)'
+}
+
 if ($NoRestart) {
     Write-Host ''
     Write-Host 'registered; restart Everything to load the plugin (-NoRestart was given)'
@@ -317,34 +348,4 @@ $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/mcp" -Method Post `
 $server = ($response.Content | ConvertFrom-Json).result.serverInfo
 Write-Host "verified $($server.name) $($server.version)"
 
-# Everything's own HTTP port is configurable, and neither front end can guess it at
-# run time. Read it once here and record it where the server looks
-# (%APPDATA%\everything-search-mcp\config.json) - cheaper and far more reliable than
-# probing ports on every start.
-function Get-HttpServerUrl([string]$IniPath) {
-    if (-not (Test-Path $IniPath)) { return $null }
-    $inSection = $false
-    foreach ($line in (Get-Content $IniPath)) {
-        $text = $line.Trim()
-        if ($text -match '^\[(.+)\]$') {
-            $inSection = ($Matches[1] -eq 'http_server64.dll')
-            continue
-        }
-        if ($inSection -and $text -match '^port=(\d+)$') {
-            return "http://127.0.0.1:$($Matches[1])"
-        }
-    }
-    return $null
-}
-
-$httpUrl = Get-HttpServerUrl $pluginIni
-if ($httpUrl) {
-    $cfgDir = Join-Path $env:APPDATA 'everything-search-mcp'
-    $cfgPath = Join-Path $cfgDir 'config.json'
-    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
-    @{ http_url = $httpUrl } | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
-    Write-Host "http    $httpUrl  (recorded in $cfgPath)"
-} else {
-    Write-Host 'http    could not read the HTTP server port from Plugins.ini; the server will use its default (23333)'
-}
 if (Test-Path $log) { Get-Content $log | ForEach-Object { Write-Host "log     $_" } }

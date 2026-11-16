@@ -472,10 +472,50 @@ impl Config {
         let url = std::env::var("EVERYTHING_HTTP_URL")
             .ok()
             .filter(|v| !v.trim().is_empty())
+            .or_else(Config::installed_url)
             .unwrap_or_else(|| DEFAULT_URL.to_string());
         Self::from_url(&url).unwrap_or_else(|_| {
             Self::from_url(DEFAULT_URL).expect("the built-in default address parses")
         })
+    }
+
+    /// The address recorded by the installer, when Everything does not listen on
+    /// 23333.
+    ///
+    /// Its HTTP port is configurable and neither front end can guess it at run time,
+    /// so `install-plugin.ps1` reads `Plugins.ini` once and writes the answer to
+    /// `%APPDATA%\everything-search-mcp\config.json`. Absent or unreadable means
+    /// "use the built-in default", which is what a fresh install gets.
+    fn installed_url() -> Option<String> {
+        // Read once per process: this is consulted on every request.
+        static CACHED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        CACHED.get_or_init(Config::read_installed_url).clone()
+    }
+
+    fn read_installed_url() -> Option<String> {
+        let base = std::env::var_os("APPDATA")?;
+        let path = std::path::Path::new(&base)
+            .join("everything-search-mcp")
+            .join("config.json");
+        let text = std::fs::read_to_string(path).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+        value
+            .get("http_url")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    }
+
+    /// Rebuild the address this config points at, credentials included.
+    ///
+    /// `servers::local_url` used to duplicate the env lookup and hard-code 23333,
+    /// which made the install-time config file invisible to every search backend.
+    pub fn base_url(&self) -> String {
+        match &self.auth {
+            Some((user, pass)) => format!("http://{user}:{pass}@{}:{}", self.host, self.port),
+            None => format!("http://{}:{}", self.host, self.port),
+        }
     }
 
     /// Parse one Everything address. `host`, `host:port`, `http://host:port` and

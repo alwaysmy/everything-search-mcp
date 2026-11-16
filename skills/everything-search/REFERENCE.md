@@ -174,6 +174,37 @@ warning: path not found: D:\NoSuchDir
 
 结构化字段里也有 `warnings: ["path not found: ..."]`。看到它，说明**范围写错了，不是目录空的**。
 （非 0 结果时不查盘，所以正常查询没有额外开销。）
+## 依赖目录与紧凑输出
+
+两个只影响"读起来累不累"的开关，默认都关：
+
+**`exclude_noise: true`** — 在查询里追加 `!path:node_modules`、`.git`、`.venv`、`dist`、`build`、`target`、`__pycache__`、`site-packages` 排除。
+实测 `D:\WorkDesigns` 下 `*.js`：**15312 → 1834**（少 88%）。搜代码时基本都该开。
+
+**`format: "compact"`** — 每条只输出一行完整路径，不带宽高尺寸和时间。20 条结果从 60 行降到 20 行。
+
+```
+query: *.js
+effective query: path:"D:\WorkDesigns" !path:node_modules ... *.js
+
+source: local
+  D:\WorkDesigns\...\app.js
+  D:\WorkDesigns\...\client.js
+```
+
+结构化输出里对应 `format` 和 `noise_filter` 两个字段，便于程序判断。
+
+## Everything 的 HTTP 端口不是 23333 时
+
+安装脚本会读 `Plugins.ini` 里 `[http_server64.dll] port=`，把地址写进
+`%APPDATA%\everything-search-mcp\config.json`：
+
+```json
+{ "http_url": "http://127.0.0.1:8011" }
+```
+
+服务端启动时按 **环境变量 `EVERYTHING_HTTP_URL` → 该文件 → 默认 23333** 的顺序取值。
+所以改过端口不需要再设环境变量，重跑一次安装脚本即可。
 ## 看 `effective_query` 自查
 
 每个结果都会回传 **`effective_query`** —— 服务端实际执行的 Everything 表达式

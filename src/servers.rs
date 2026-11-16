@@ -66,10 +66,10 @@ pub fn path() -> Result<PathBuf, String> {
 /// The address of the local instance, which is what the registry cannot tell us
 /// when `local` was never registered.
 pub fn local_url() -> String {
-    std::env::var("EVERYTHING_HTTP_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "http://127.0.0.1:23333".to_string())
+    // One source of truth: the environment, then the install-time file, then the
+    // default. Re-deriving it here is how the config file ended up invisible to
+    // every search backend while `Config::from_env` honoured it.
+    crate::everything::Config::from_env().base_url()
 }
 
 impl Registry {

@@ -429,7 +429,26 @@ struct Filters<'a> {
     entry_type: &'a str,
     path: Option<&'a str>,
     regex: bool,
+    /// Append `!path:` clauses for build/dependency directories.
+    noise: bool,
 }
+
+/// Directories an agent almost never wants when it asks for "all *.ts".
+///
+/// Opt-in rather than default: Everything's exclusion is a filter over an already
+/// built index, so it costs a little, and a caller that genuinely wants
+/// `node_modules` should not have to fight the tool.
+const NOISE_PATHS: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "target",
+    "__pycache__",
+    "site-packages",
+];
 
 /// A warning when the caller scoped a query to a directory that is not there.
 ///
@@ -459,6 +478,11 @@ fn compile(f: &Filters) -> Result<String, String> {
     if let Some(p) = f.path.filter(|p| !p.trim().is_empty()) {
         let p = p.trim().trim_end_matches(|c| c == '\\' || c == '/');
         parts.push(format!("path:\"{p}\""));
+    }
+    if f.noise {
+        for excluded in NOISE_PATHS {
+            parts.push(format!("!path:{excluded}"));
+        }
     }
     match f.entry_type {
         "file" => parts.push("file:".to_string()),
@@ -679,7 +703,7 @@ fn local_backend(base: &Config, reg: &servers::Registry) -> Result<Backend, Stri
     let url = reg
         .get(servers::LOCAL)
         .map(|e| e.url.clone())
-        .unwrap_or_else(servers::local_url);
+        .unwrap_or_else(|| base.base_url());
     Ok(Backend {
         name: servers::LOCAL.to_string(),
         config: base.retarget(&url)?,
@@ -817,7 +841,7 @@ fn any_has_more(groups: &[Group], offset: usize) -> Option<bool> {
 /// call is byte-for-byte what it was. Several are grouped under a header per machine:
 /// a merged list mixing `D:\...` from two computers is exactly the reading that turns
 /// a remote hit into a local path.
-fn render_groups(groups: &[Group], offset: usize, path: Option<&str>) -> String {
+fn render_groups(groups: &[Group], offset: usize, path: Option<&str>, compact: bool) -> String {
     if groups.len() == 1 {
         let g = &groups[0];
         return match &g.error {
@@ -825,7 +849,7 @@ fn render_groups(groups: &[Group], offset: usize, path: Option<&str>) -> String 
             None => format!(
                 "source: {}\n{}",
                 g.name(),
-                format_items(&g.items, offset, g.total)
+                format_items(&g.items, offset, g.total, compact)
             ),
         };
     }
@@ -855,7 +879,7 @@ fn render_groups(groups: &[Group], offset: usize, path: Option<&str>) -> String 
                         }
                     }
                 } else {
-                    out.push_str(&format_rows(&g.items));
+                    out.push_str(&format_rows(&g.items, compact));
                 }
             }
         }
@@ -906,6 +930,8 @@ impl Handler for Tools {
                 "category": p_enum(&format!("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause. {cats_desc}."), &cats, Some("")),
                 "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
+            "exclude_noise": p_bool("Append !path: exclusions for node_modules, .git, .venv, dist, build, target, __pycache__, site-packages. Off by default; turn it on when a broad glob would otherwise be drowned by dependencies.", false),
+            "format": p_enum("Text layout: 'detailed' (default) prints path, size and date per row; 'compact' prints one path per line, which is what you want when feeding many rows into context.", &["detailed", "compact"], Some("detailed")),
                 "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
                 "offset": p_int("Skip N results (pagination)", 0, 0, 2147483647),
                 "sort": p_string(&sort_desc, Some("date-modified-desc")),
@@ -925,6 +951,7 @@ impl Handler for Tools {
             json!({
                 "period": p_string(&format!("How recent. One of: {}. Raw Everything syntax such as 'last2hours' is also accepted.", PERIOD_NAMES.join(", ")), Some("1day")),
                 "path": p_string("Restrict to this directory path", Some("")),
+            "format": p_enum("Text layout: 'detailed' (default) or 'compact' (one path per line).", &["detailed", "compact"], Some("detailed")),
                 "extensions": p_string("Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'", Some("")),
                 "query": p_string("Additional search filter", Some("")),
                 "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
@@ -955,6 +982,7 @@ impl Handler for Tools {
                 "category": p_enum(&format!("Restrict to a file category. {cats_desc}."), &cats, Some("")),
                 "entry_type": p_enum("Restrict to files or folders.", &["any", "file", "folder"], Some("any")),
                 "path": p_string("Restrict counting to this directory", Some("")),
+            "exclude_noise": p_bool("Append !path: exclusions for node_modules, .git, .venv, dist, build, target, __pycache__, site-packages before counting.", false),
                 "include_size": p_bool("Report total size of matching files. Without exact_size the figure is omitted entirely rather than estimated from a biased sample.", true),
                 "exact_size": p_bool("Sum every match to get an exact total size. Costs one paged pass over the result set, so it is opt-in; refused above 200000 matches. The extension breakdown remains limited to the initial sample.", false),
                 "breakdown_by_extension": p_bool("Break the result set down by extension", false),
@@ -1130,8 +1158,14 @@ fn file_size_sum(items: &[Item]) -> Result<u64, String> {
 
 /// Just the rows. A grouped answer needs them under a per-machine header, and the
 /// footer belongs to the whole answer rather than to one group.
-fn format_rows(items: &[Item]) -> String {
+fn format_rows(items: &[Item], compact: bool) -> String {
     let mut out = String::new();
+    if compact {
+        for it in items {
+            out.push_str(&format!("  {}\n", it.full_path()));
+        }
+        return out;
+    }
     for it in items {
         let tag = if it.is_dir { "DIR " } else { "FILE" };
         let mut meta: Vec<String> = Vec::new();
@@ -1165,11 +1199,11 @@ fn format_rows(items: &[Item]) -> String {
     out
 }
 
-fn format_items(items: &[Item], offset: usize, total: u64) -> String {
+fn format_items(items: &[Item], offset: usize, total: u64, compact: bool) -> String {
     if items.is_empty() {
         return "No results.\n".to_string();
     }
-    let mut out = format_rows(items);
+    let mut out = format_rows(items, compact);
     out.push_str(&format!(
         "\n{} result(s) from offset {} of {} matching (exact total).",
         items.len(),
@@ -1272,6 +1306,13 @@ impl Tools {
         let category = opt(args, "category");
         let entry_type = s_or(args, "entry_type", "any");
         let path = opt(args, "path");
+        let exclude_noise = b(args, "exclude_noise", false);
+        let format = s_or(args, "format", "detailed");
+        if format != "detailed" && format != "compact" {
+            return Err(format!(
+                "invalid format '{format}'. Valid: detailed, compact"
+            ));
+        }
         if query.trim().is_empty() && category.is_none() && entry_type == "any" {
             // A wrong parameter name lands here: query empty, nothing to filter by.
             // Say what arrived, or the caller cannot tell a typo from a real misuse.
@@ -1348,6 +1389,7 @@ impl Tools {
             entry_type: &entry_type,
             path: path.as_deref(),
             regex,
+            noise: exclude_noise,
         })?;
 
         let backends = resolve_backends(self.client.config(), args)?;
@@ -1428,7 +1470,12 @@ impl Tools {
                 head.push_str(&format!("match modes: {}\n", match_modes.join(", ")));
             }
             head.push('\n');
-            head.push_str(&render_groups(&groups, offset, path.as_deref()));
+            head.push_str(&render_groups(
+                &groups,
+                offset,
+                path.as_deref(),
+                format == "compact",
+            ));
             head
         };
         // Say it loudly: "0 results" from a directory that does not exist is the
@@ -1462,6 +1509,8 @@ impl Tools {
             "next_offset": next,
             "has_more": has_more,
             "results": results,
+            "format": format,
+            "noise_filter": exclude_noise,
             "warnings": path_warning.iter().cloned().collect::<Vec<String>>(),
             "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         });
@@ -1615,6 +1664,7 @@ impl Tools {
             requested_period.clone()
         };
 
+        let format = s_or(args, "format", "detailed");
         let mut text = format!(
             "recent: requested {requested_period}, effective {effective_period}{}\n",
             if expanded {
@@ -1624,7 +1674,12 @@ impl Tools {
             }
         );
         text.push_str(&format!("effective query: {effective}\n\n"));
-        text.push_str(&render_groups(&groups, 0, path.as_deref()));
+        text.push_str(&render_groups(
+            &groups,
+            0,
+            path.as_deref(),
+            format == "compact",
+        ));
 
         let mut structured = json!({
             "query": extra,
@@ -1940,6 +1995,7 @@ impl Tools {
             return Err("query is required".into());
         }
         let path = opt(args, "path");
+        let exclude_noise = b(args, "exclude_noise", false);
         let include_size = b(args, "include_size", true);
         let want_exact = b(args, "exact_size", false);
         let breakdown = b(args, "breakdown_by_extension", false);
@@ -1960,6 +2016,7 @@ impl Tools {
             entry_type: &entry_type,
             path: path.as_deref(),
             regex: false,
+            noise: exclude_noise,
         })?;
 
         // count=1 is enough for an exact total; a wider sample is only needed when
@@ -1992,6 +2049,7 @@ impl Tools {
             "query": query,
             "effective_query": effective,
             "count": total,
+            "noise_filter": exclude_noise,
             "warnings": path_warning.iter().cloned().collect::<Vec<String>>(),
             "count_accuracy": total_accuracy(&groups),
             "count_scope": if total_accuracy(&groups)=="exact" {"all requested indexes"} else {"reachable indexes"},
@@ -2387,5 +2445,31 @@ mod path_warning_tests {
 
         let here = std::env::temp_dir();
         assert!(missing_path_warning(Some(here.to_str().unwrap()), 0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod noise_tests {
+    use super::{compile, Filters};
+
+    fn filters(noise: bool) -> Filters<'static> {
+        Filters {
+            raw: "*.ts",
+            category: None,
+            entry_type: "any",
+            path: None,
+            regex: false,
+            noise,
+        }
+    }
+
+    #[test]
+    fn noise_filter_adds_path_exclusions_only_when_asked() {
+        let quiet = compile(&filters(true)).unwrap();
+        assert!(quiet.contains("!path:node_modules"), "{quiet}");
+        assert!(quiet.contains("!path:target"), "{quiet}");
+
+        let plain = compile(&filters(false)).unwrap();
+        assert!(!plain.contains("!path:"), "{plain}");
     }
 }

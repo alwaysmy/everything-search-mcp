@@ -32,6 +32,14 @@ the docs — a reader installing the tool does not need to know what it used to 
   `%APPDATA%\everything-search-mcp\config.json`; the server resolves
   environment variable → that file → default 23333.
 
+### Changed
+
+- A zero-result search now always ends with `Total matches: 0 (exact)`. `No results.`
+  alone could not be told apart from a query that never ran — the ambiguity
+  `include_total` was added for in 0.3.x, when the total cost a second request. It
+  comes back with the search response now, so the number is printed unconditionally
+  and `include_total` is gone; passing it produces the unknown-argument warning.
+
 ### Fixed
 
 - Output schemas declare `additionalProperties: false` but omitted the new fields,

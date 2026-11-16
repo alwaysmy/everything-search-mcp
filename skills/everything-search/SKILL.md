@@ -50,7 +50,6 @@ description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫�
 | `sort` | 14 种，见下表；默认 `date-modified-desc` |
 | `match_case` / `match_whole_word` / `match_regex` / `match_path` | 匹配修饰符。**生效情况看回传的 `match_modes`**，别只看 `effective_query` |
 | **`max_per_parent`** | 每个父目录最多保留 N 条。**Everything 很容易让前 20 条全来自同一个目录树**（比如一堆 `node_modules`），对定位没帮助；需要多样化时设成 2–3 |
-| `include_total` | 文本形式里附上总数（总数本来就是精确的，这个只控制显不显示） |
 | **`url`** | 搜哪台机器：名字、地址、或数组（多台一起搜）。**替换默认集合**，详见「搜别的机器」 |
 | **`exclude_noise`** | 追加排除 `node_modules/.git/.venv/dist/build/target/__pycache__/site-packages`。搜代码默认该开（实测 `*.js` 少 88%） |
 | **`format`** | `detailed`（默认，带大小和时间）/ `compact`（一行一个路径，省 token） |

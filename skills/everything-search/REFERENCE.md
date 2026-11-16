@@ -36,6 +36,7 @@ skill 目录搬走也不会失效。
 
 ```
 <本 skill 目录>\bin\everything-search-mcp.exe search "*.py" --path D:\Projects --max 20
+<本 skill 目录>\bin\everything-search-mcp.exe search "*.js" --path D:\Projects --format compact --exclude-noise
 <本 skill 目录>\bin\everything-search-mcp.exe recent --period 1week --path D:\Projects
 <本 skill 目录>\bin\everything-search-mcp.exe count "ext:pdf" --exact-size
 <本 skill 目录>\bin\everything-search-mcp.exe details D:\a\b.rs --preview 20

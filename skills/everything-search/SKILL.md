@@ -6,9 +6,9 @@ description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫�
 
 # everything-search MCP 使用指南
 
-> 判断该不该用、怎么不踩坑 → 本文。完整参数、CLI 兜底、**搜别的机器**、类别扩展名表、排错全集 → 同目录 `REFERENCE.md`。
-> **没有 MCP 的环境（pi 之类只有 bash 的 harness）**：不要把 `everything-search-mcp.exe` 当命令跑，
-> 改用 Everything 自带的 `es.exe`，见 `REFERENCE.md` 的「无 MCP 时的用法」。
+> 判断该不该用、怎么不踩坑 → 本文。完整参数、HTTP 兜底、**搜别的机器**、类别扩展名表、排错全集 → 同目录 `REFERENCE.md`。
+> **没有 MCP 的环境（pi 之类只有 bash 的 harness）**：`everything-search-mcp.exe` 只做 MCP，不要当命令跑；
+> 直接用四行 curl/PowerShell 查 Everything 的 HTTP 接口，见 `REFERENCE.md` 的「没有 MCP 时的兜底」。
 
 ## 前提：Everything 的 HTTP 服务器必须是开着的
 
@@ -167,6 +167,6 @@ wholeword:read                # 全词匹配
 
 ## 更多
 
-- `REFERENCE.md`：配置 MCP、CLI 模式、远程多机搜索、参数平铺与拼写报错、`effective_query`、
-  `find_recent` / `file_details` / `count_stats` 细节、排序值、函数 vs 参数实测、类别扩展名表、pi 用法
+- `REFERENCE.md`：配置 MCP、HTTP 兜底、远程多机搜索、参数平铺与拼写报错、`effective_query`、
+  `find_recent` / `file_details` / `count_stats` 细节、排序值、函数 vs 参数实测、类别扩展名表
 - `INSTALL.md`：安装与配置排错

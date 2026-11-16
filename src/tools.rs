@@ -669,9 +669,9 @@ fn resolve_backends(base: &Config, args: &Value) -> Result<Vec<Backend>, String>
                 let known = reg.names();
                 if known.is_empty() {
                     format!(
-                        "unknown server '{w}', and none are registered. Add one with \
-                         `everything-search-mcp servers add <name> <url>`, or pass an \
-                         address such as http://10.0.0.2:23333."
+                        "unknown server '{w}', and none are registered. Add an entry to \
+                         %APPDATA%\\everything-search-mcp\\servers.json, or pass an address \
+                         such as http://10.0.0.2:23333."
                     )
                 } else {
                     format!("unknown server '{w}'. Registered: {}.", known.join(", "))
@@ -1228,7 +1228,7 @@ fn format_items(items: &[Item], offset: usize, total: u64, compact: bool) -> Str
 /// that broad is nearly always one the caller should have narrowed instead. The
 /// response already carries `total` - that is the signal to narrow - while
 /// `has_more` and `next_offset` cover the case where more rows really are wanted.
-/// The CLI has defaulted to 20 since it was written; this brings MCP in line.
+/// 20 keeps a broad query from filling the context window by itself.
 const DEFAULT_MAX_RESULTS: usize = 20;
 
 /// Everything's HTTP API returns sizes per row but has no aggregate, so summing

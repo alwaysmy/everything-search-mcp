@@ -39,9 +39,8 @@ load".
 
 The `everything-search-plugin-<v>.zip` archive holds the DLL, this file and
 `install-plugin.ps1` — **no executable**, by design: nothing in this path shells out
-to `everything-search-mcp.exe`. If you also want that CLI (a one-off `search` from a
-terminal, or a client that only speaks stdio), take `everything-search-skill-<v>.zip`
-as well.
+to `everything-search-mcp.exe`. Use the skill archive instead if your client spawns a
+stdio process rather than talking HTTP.
 
 From the repository root, in an elevated PowerShell:
 

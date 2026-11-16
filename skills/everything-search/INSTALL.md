@@ -4,15 +4,20 @@
 
 ## 0. 一句话版本
 
-```powershell
-# 让所有检测到的客户端都指向本 skill 自带的 exe（会先备份每个配置文件）
-<本 skill 目录>\bin\everything-search-mcp.exe config --write
+本版本不带配置生成器（CLI 已移除），配置就是往客户端里粘一段 JSON：
+
+```json
+{
+  "mcpServers": {
+    "everything-search": {
+      "command": "C:\\Users\\<你>\\.agents\\skills\\everything-search\\bin\\everything-search-mcp.exe"
+    }
+  }
+}
 ```
 
-它会自动把 exe 的**绝对路径**写进 DeepSeek Harness / Claude Code / Codex / Gemini /
-Cursor / VS Code 里已经存在的配置文件，并顺手探测 Everything 的 HTTP 服务是否通。
-
-只想看看会写什么、不动任何文件：去掉 `--write` 即可。
+路径换成本机 exe 的**绝对路径**（skill 目录搬到哪，这里就改到哪）。
+配好后客户端里应出现 5 个 `everything_search*` 工具；没出现就是配置位置不对，按下面各客户端的表格核对。
 
 ### exe 从哪来
 
@@ -28,7 +33,7 @@ gh release download --repo alwaysmy/everything-search-mcp `
 ```
 
 或浏览器打开 <https://github.com/alwaysmy/everything-search-mcp/releases>。
-放好后 `config --write` 会自动用上它的绝对路径，不需要改任何脚本。
+放好后按第 2 节把它的绝对路径粘进客户端配置。
 
 ## 1. 前提条件
 
@@ -59,66 +64,51 @@ Everything → **工具 → 选项 → HTTP 服务器** → 勾选「启用 HTTP
 > bindings=127.0.0.1
 > ```
 
-## 2. 生成 / 应用配置
+## 2. 配置客户端
 
-### 2.1 自动写入（推荐）
+把这段粘进客户端的 MCP 配置文件（各客户端位置见第 3 节）：
 
-```powershell
-& '<本 skill 目录>\bin\everything-search-mcp.exe' config --write
+```json
+{
+  "mcpServers": {
+    "everything-search": {
+      "command": "C:\\Users\\<你>\\.agents\\skills\\everything-search\\bin\\everything-search-mcp.exe"
+    }
+  }
+}
 ```
 
-- 默认只处理**本机已存在**的客户端配置文件，不会凭空创建目录。
-- 每个被改动的文件都会先备份成 `<原文件名>.bak-<UTC 时间戳>Z`。
-- 只替换自己那一条 server 条目，其它内容原样保留（DSH 的 YAML 注释也不会被吃掉）。
+- 路径必须是本机绝对路径；skill 目录搬家后改这一行就行。
+- 名字随便起，只要不和已有条目不冲突。
+- 配完重启客户端，工具列表里出现 5 个 `everything_search*` 即成功。
 
-只配某一个：
+### 2.1 可配置的环境变量
 
-```powershell
-... config --target dsh --write
-... config --target claude,codex --write
-... config --target vscode --write
+客户端配置里**默认不用写 env**——默认值就是本机最常用的一组。要覆盖时加 `env`：
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `EVERYTHING_HTTP_URL` | `http://127.0.0.1:23333` | Everything HTTP 地址；改过端口才需要 |
+| `EVERYTHING_TIMEOUT` | `30` | 单次请求超时秒数 |
+| `EVERYTHING_MAX_RESULTS_CAP` | `1000` | 单次返回条数硬上限（控制 token 用量） |
+| `EVERYTHING_SERVERS_FILE` | `%APPDATA%\everything-search-mcp\servers.json` | 远程机器登记表的位置 |
+
+```json
+{ "mcpServers": { "everything-search": {
+    "command": "C:\\...\\everything-search-mcp.exe",
+    "env": { "EVERYTHING_TIMEOUT": "10" }
+}}}
 ```
-
-删掉某一条（改了 server 名时用它，避免新旧两条同时存在）：
-
-```powershell
-... config --target opencode --name 旧名字 --remove
-```
-
-写到别处 / 换个 server 名：
-
-```powershell
-... config --file D:\some\.mcp.json --write      # 按扩展名推断格式（.yml/.yaml/.toml 其它按 JSON）
-... config --name everything-search --write      # 默认名是 everything
-```
-
-### 2.2 只看不写
-
-```powershell
-... config                 # 列出检测到的目标 + 每个目标该粘什么
-... config --json          # 机器可读版本
-... config --target json   # 只要一段通用 mcpServers 块
-```
-
-### 2.3 可配置的环境变量
-
-生成的配置默认**不写任何 env**——默认值已经是本机最常用的一组。要覆盖时用命令行旗标：
-
-| 旗标 | 环境变量 | 默认 | 说明 |
-|---|---|---|---|
-| `--http-url` | `EVERYTHING_HTTP_URL` | `http://127.0.0.1:23333` | Everything HTTP 地址；改过端口才需要 |
-| `--timeout` | `EVERYTHING_TIMEOUT` | `30` | 单次请求超时秒数 |
-| `--max-results-cap` | `EVERYTHING_MAX_RESULTS_CAP` | `1000` | 单次返回条数硬上限（控制 token 用量） |
-| （无旗标） | `EVERYTHING_SERVERS_FILE` | `%APPDATA%\everything-search-mcp\servers.json` | 远程机器登记表的位置 |
 
 旧版的 `EVERYTHING_ES_PATH` / `EVERYTHING_INSTANCE` 已**不存在**，不要再用。
 
-要搜**别的机器**上的 Everything，用 `servers add` 登记（见 SKILL.md「搜别的机器」），
-或在调用里直接传 `url` —— 这不需要任何环境变量，也不用在那台机器上装东西。
+要搜**别的机器**，往 `servers.json` 里加一条（见 `REFERENCE.md`「搜别的机器」），
+或在调用里直接传 `url` —— 不需要环境变量，也不用在那台机器上装东西。
 
 ## 3. 各客户端配置形态（手工参考）
 
-`config` 输出的就是下面这些；这里列出来是为了让你在别的机器上能照抄。
+下面是各客户端该长什么样，照抄即可。
+
 
 ### DeepSeek Harness — `%USERPROFILE%\.dsh\cordis.patch.yml`
 
@@ -205,17 +195,17 @@ opencode 的写法又不一样：`command` 是**数组**、类型叫 `local`、�
 ```
 
 > 注意 **server 名不要重复**。如果之前叫 `everything-search`、现在叫 `everything`，
-> 先用 `config --target opencode --name everything-search --remove` 把旧条目删掉，
+> 先把旧的那条从配置文件里删掉，
 > 否则 opencode 会把同一套工具注册两遍。
 
 ## 4. 验证
 
-```powershell
-# 1) 配置状态 + Everything 是否可达（会打印已索引对象数）
-... config
+先确认 Everything 的 HTTP 服务通（不经过 MCP）：
 
-# 2) 直接跑一次查询（不经过 MCP）
-... search "*.py" --path D:\Projects --max 5
+```powershell
+$r = Invoke-RestMethod 'http://127.0.0.1:23333/?search=*.py&path=D:\Projects&json=1&count=5'
+$r.total            # 有数字就说明索引和端口都正常
+$r.results[0].full_path
 ```
 
 MCP 侧验证：重启客户端后调用 `everything_search`，`query` 填 `*.py`。
@@ -230,7 +220,7 @@ MCP 侧验证：重启客户端后调用 `everything_search`，`query` 填 `*.py
 | 查询恒返回 0 条且很快 | 该语法 Everything 没索引，典型是 `content:`（见 SKILL.md 陷阱一节） |
 | 结果全是 `node_modules` | 用 `max_per_parent` 做结果多样化，或加 `path` 限定 |
 | 想确认实际执行了什么表达式 | 看结果里的 `effective_query` |
-| `unknown server 'xxx'` | 名字没登记过。`servers list` 看有哪些，或直接传地址 `http://host:23333` |
+| `unknown server 'xxx'` | 名字没登记过。看 `servers.json` 里有哪些，或直接传地址 `http://host:23333` |
 | 远程机器报连不上 | 那台机器没开机 / Everything 没在跑 / HTTP 口没开 / 防火墙或网段不通。远程报错里给的就是这个地址，先 ping 一下 |
 | 远程命中却在本机读不到文件 | 路径属于那台机器，本机没有。详见 SKILL.md「搜别的机器」 |
 | 多机结果里的 `total` | 是各机精确计数之和；某台连不上时汇总行会写 `N index(es) unreachable`，那行不能忽略 |

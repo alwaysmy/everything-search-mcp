@@ -44,19 +44,22 @@ install a Rust toolchain to run a file search plugin.
 `everything-search-skill-<v>.zip`, which is the binary plus the agent-facing skill
 that explains how to use the tools well.
 
-**2. Point your clients at it.** The executable knows its own absolute path, so
-it writes the configuration itself — no hand-copied paths, and nothing breaks
-when the folder moves:
+**2. Point your clients at it.** Paste one entry — there is no config generator to
+run (the CLI that carried it was removed, see [Why there is no CLI](#why-there-is-no-cli)):
 
-```powershell
-.\everything-search-mcp.exe config          # show what each client on this machine needs
-.\everything-search-mcp.exe config --write  # apply it (every file backed up first)
+```json
+{
+  "mcpServers": {
+    "everything-search": {
+      "command": "C:\\path\\to\\everything-search-mcp.exe"
+    }
+  }
+}
 ```
 
-It covers DeepSeek Harness, Claude Code, Claude Desktop, Codex CLI, Gemini CLI,
-Cursor, VS Code and opencode, each in its own format. With no `--target` it acts
-on exactly those clients whose config file already exists; with no `--write` it
-changes nothing and just prints the snippet.
+`skills/everything-search/INSTALL.md` has the file location and the exact shape for
+DeepSeek Harness, Claude Code, Claude Desktop, Codex CLI, Gemini CLI, Cursor, VS Code
+and opencode. Five `everything_search*` tools appearing is the proof it worked.
 
 **3. Requirements.** Windows, Everything installed **and running**, and
 Everything's HTTP server enabled on port `23333`
@@ -82,16 +85,14 @@ Everything's HTTP server. The plugin adds a transport, not a second query path.
 
 What each archive actually contains matters here:
 
-| | contains | one-shot CLI (`everything-search-mcp.exe search …`) |
+| | contains | for |
 |---|---|---|
-| `everything-search-skill-<v>.zip` | the executable + skill docs | ✅ |
-| `everything-search-plugin-<v>.zip` | only the DLL + installer + `PLUGIN.md` | ❌ nothing to run |
+| `everything-search-skill-<v>.zip` | the executable + skill docs | clients that spawn a stdio process |
+| `everything-search-plugin-<v>.zip` | only the DLL + installer + `PLUGIN.md` | Everything loading the endpoint in-process |
 
 The plugin archive ships no executable **by design**: once the DLL is loaded
-nothing shells out to `everything-search-mcp.exe`, so building one would be dead
-weight. The flip side is that a plugin-only install has no CLI fallback — if you
-want `everything-search-mcp.exe search …` for one-off use, or a stdio client,
-take the skill archive (or a checkout) as well.
+nothing shells out to `everything-search-mcp.exe`. Neither archive has a CLI —
+the executable speaks MCP and nothing else.
 
 ### Install
 
@@ -203,17 +204,23 @@ is diagnosable instead of guessable:
 Everything's HTTP server answers on any host, so these tools can search another
 machine's index. Register the machine once:
 
-```powershell
-everything-search-mcp servers add workshop http://10.0.0.2:23333
-everything-search-mcp servers list
+Registration is one entry in `%APPDATA%\everything-search-mcp\servers.json`:
+
+```json
+{
+  "servers": [
+    { "name": "workshop", "url": "http://10.0.0.2:23333", "enabled": true }
+  ]
+}
 ```
 
-Then either let every search include it, or name it per call:
+Then either let every search include it, or name it per call — the `url` argument
+takes a name, an address, or an array:
 
-```powershell
-everything-search-mcp search "*.pdf"                              # every enabled instance
-everything-search-mcp search "*.pdf" --url workshop               # only that one
-everything-search-mcp search "*.pdf" --url local --url workshop   # both, grouped
+```
+{ "query": "*.pdf" }                                → every enabled instance
+{ "query": "*.pdf", "url": "workshop" }             → only that one
+{ "query": "*.pdf", "url": ["local", "workshop"] }  → both, grouped
 ```
 
 The `url` argument **replaces** the default set rather than adding to it, so
@@ -268,19 +275,26 @@ whole total. Measured here: local alone 2.3 ms, local plus a Tailscale instance
 41 ms (p90 112 ms) — the link is the difference, not the fan-out.
 
 An instance you need only occasionally is therefore worth registering with
-`--disabled`: it stays discoverable, because the tools list it by name in their
-`url` description, and costs nothing until a call names it.
+`"enabled": false`: it stays discoverable, because the tools list it by name in
+their `url` description, and costs nothing until a call names it.
 
 ### Managing instances
 
-```powershell
-everything-search-mcp servers list                    # what is registered, and its switch
-everything-search-mcp servers add nas http://10.0.0.3:23333
-everything-search-mcp servers add nas http://10.0.0.3:23333 --disabled
-everything-search-mcp servers disable nas             # keep the entry, stop searching it
-everything-search-mcp servers remove nas
-everything-search-mcp servers path                    # where the file lives
+There is no registry command — the file is the interface, and it is re-read on
+every call, so an edit takes effect immediately:
+
+```json
+{
+  "servers": [
+    { "name": "local",   "url": "http://127.0.0.1:23333", "enabled": true },
+    { "name": "workshop","url": "http://10.0.0.2:23333",  "enabled": true },
+    { "name": "nas",     "url": "http://10.0.0.3:23333",  "enabled": false }
+  ]
+}
 ```
+
+Drop an entry to forget a machine; flip `enabled` to park one without losing its
+address. Deleting the file returns to the zero-configuration state (local only).
 
 A switch is remembered across restarts, so a machine that is off stays off instead
 of costing a connect timeout on every search. `local` is built in and needs no
@@ -294,24 +308,28 @@ server.
 > (`http://user:password@host:port`) for an instance configured to require them;
 > that path is implemented but not covered by the test suite.
 
-## The same executable is also a CLI
+## Why there is no CLI
 
-Started with no arguments it is an MCP stdio server, which is how a client spawns
-it. Started with a subcommand it is a one-shot tool — usable from a script, a CI
-job, or an agent that has no MCP support at all:
+The previous release also took subcommands (`search`, `recent`, `count`, `details`,
+`servers`, `config`). This one does not: two surfaces for the same query drift apart,
+and the tool side kept gaining switches the CLI never learned. That asymmetry was
+found by a regression run, not by reading the code.
+
+For a script, a CI job, or an agent with no MCP support, query Everything's own HTTP
+API directly — it is the same index, four lines, and nothing to install:
 
 ```powershell
-everything-search-mcp search "*.py" --path D:\Projects --max 20
-everything-search-mcp recent --period 1week --path D:\Projects
-everything-search-mcp count  "ext:pdf" --exact-size
-everything-search-mcp details D:\a\b.rs --preview 20
-everything-search-mcp search "*.pdf" --url local --url workshop
-everything-search-mcp servers list
-everything-search-mcp config --write
+$r = Invoke-RestMethod 'http://127.0.0.1:23333/?search=ext:py&path=D:\Projects&json=1&count=20'
+$r.results | ForEach-Object { $_.full_path }
 ```
 
-Exit codes: `0` success, `1` query failed (message on stderr), `2` bad arguments.
-`--json` prints the structured form instead of text.
+```bash
+curl -s 'http://127.0.0.1:23333/?search=ext:py&path=D:\Projects&json=1&count=20' | jq -r '.results[].full_path'
+```
+
+`search=` takes Everything query syntax (`ext:pdf`, `dm:today`, `size:>10gb`),
+`path=` scopes it, `count=` caps the rows, `json=1` asks for structure. Older
+release tags still carry the CLI if a script already depends on it.
 
 ## Accuracy is labelled
 
@@ -451,36 +469,26 @@ deleting it (Windows allows renaming a running executable).
 Cargo.toml      2 dependencies (serde, serde_json); lto + strip + panic=abort
 deploy.ps1      build and install
 src/
-  main.rs       entry point: no args = MCP stdio server, else the CLI
+  main.rs       entry point: MCP stdio server, nothing else
   jsonrpc.rs    MCP stdio protocol, flat-schema tools, params compat shim
   everything.rs addresses, query constants, FILETIME, timezone
   everything/http.rs bounded HTTP framing, size limits and request deadlines
   servers.rs    the instance registry: named Everything servers and their switches
   filetype.rs   name-level classification and header sniffing
   tools.rs      the five tools, schemas, result formatting
-  cli.rs        one-shot search/recent/count/details/servers, so the exe works with no MCP
-  setup.rs      `config`: emit or apply the client configuration for this exe
 skills/
   everything-search/   the agent-facing skill (SKILL.md + REFERENCE.md + INSTALL.md)
 TEST_SCRIPTS/
-  compare-single-backend.ps1   single-instance regression check against a git baseline
-  mock-http-smoke.py            isolated CLI/MCP parity and optional schema validation
+  multi-client-stress.ps1   concurrent clients against the plugin endpoint
+  parallel-probe.ps1        parallel multi-machine probes against a mock server
+  VALIDATION.md             what each check covers, and what it does not
 ```
 
-`compare-single-backend.ps1` builds a baseline from any commit in a `git worktree`
-and replays a batch of CLI calls against both binaries, comparing text byte for
-byte and JSON field for field. It detects intentional contract changes as well as regressions. The source labels,
-completeness fields, corrected cursors and probe behavior in this revision produce
-expected differences from older releases; do not suppress all differences as a
-blanket acceptance rule. A live Windows/Everything comparison has not been run for
-this revision. Linux loopback tests cover the shared implementation, not Windows
-installation, real index behavior or authenticated Everything configuration.
-
-Run `cargo test --locked` and `cargo build --release --locked`. For a compiled
-binary, run `python3 TEST_SCRIPTS/mock-http-smoke.py --binary <path>`; add
-`--validate-schema` when Python `jsonschema` is installed. The fixture uses a
-temporary registry and synthetic results, and checks CLI/MCP parity plus all five
-published tool schemas without querying real user files.
+Run `cargo test --locked` and `cargo build --release --locked`; the suite covers the
+shared implementation (query compilation, rendering, banners, HTTP framing, the
+plugin endpoint) against mock servers, so it runs without Everything installed. A
+live Windows/Everything comparison is not part of it: that still exercises Windows
+installation, real index behavior and authenticated Everything configuration.
 
 The crate's only `unsafe` is a single `GetTimeZoneInformation` call, used to
 render `modified` in local time without pulling in a date/time dependency.

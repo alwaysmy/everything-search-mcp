@@ -162,5 +162,14 @@ if ($blocked.Count -gt 0) {
 }
 
 Write-Host ""
-& $skillExe --version
-& $skillExe config --target json
+
+# Verify the way a client meets it: speak MCP on stdin and ask for the tool list.
+# (The binary has no CLI, so there is no --version or config command to call.)
+$initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy","version":"1"}}}'
+$list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+$payload = (@($initialize, $list) -join "`n") + "`n"
+$reply = ($payload | & $skillExe 2>$null | Out-String) -split "`n" |
+    Where-Object { $_ -match '"id":2' } | Select-Object -First 1
+if (-not $reply) { throw 'deployed binary did not answer tools/list' }
+$tools = ($reply | ConvertFrom-Json).result.tools
+Write-Host ("verified {0} tools via MCP stdio" -f $tools.Count)

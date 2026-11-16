@@ -1,8 +1,10 @@
 //! everything-search-mcp - fast Everything file search over MCP, no Python.
 //!
-//! Two front ends over one implementation:
-//!   * no arguments  -> MCP stdio server (how a client spawns it)
-//!   * a subcommand  -> one-shot CLI (see `cli.rs`), usable with no MCP wiring
+//! One front end: an MCP stdio server that a client spawns. There is no CLI —
+//! the previous release had one, and it was removed because two ways to ask the
+//! same question drifted apart (flags the tools accepted, the binary did not).
+//! For a script or a client without MCP, ask Everything's own HTTP API directly;
+//! `REFERENCE.md` in the skill has the four-line version.
 //!
 //! Answers come from voidtools Everything's index over its loopback HTTP server.
 //! No `es.exe` subprocess, no SDK DLL, no Python runtime.
@@ -11,12 +13,6 @@
 //! where Everything loads it in-process and the MCP endpoint is served from there.
 
 fn main() {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(code) = everything_mcp_core::cli::dispatch(&argv) {
-        std::process::exit(code);
-    }
-
-    // No arguments: an MCP session on stdin/stdout.
     let client = everything_mcp_core::everything::Client::new(
         everything_mcp_core::everything::Config::from_env(),
     );

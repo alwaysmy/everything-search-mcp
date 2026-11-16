@@ -1,67 +1,22 @@
 # everything-search 参考手册
 
-> 细节文档。SKILL.md 只保留「该不该用」与「三个坑」；这里放完整参数、CLI 形态、多机搜索、类别表与排错全集。
+> 细节文档。SKILL.md 只保留「该不该用」与「三个坑」；这里放完整参数、HTTP 兜底、多机搜索、类别表与排错全集。
 
-## 配置 MCP（不用手写路径）
+## 配置 MCP（复制一段 JSON）
 
-同一个 exe 自带配置生成器：它知道自己的绝对路径，所以**任何客户端配置都不用手写**，
-skill 目录搬走也不会失效。
+本版本**不带配置生成器**（CLI 已移除）。各客户端的完整位置和形状见同目录 `INSTALL.md`，最小形态：
 
-```powershell
-<本 skill 目录>\bin\everything-search-mcp.exe config            # 只看：列出本机有哪些客户端 + 该粘什么
-<本 skill 目录>\bin\everything-search-mcp.exe config --write    # 应用：自动写进各客户端配置（先备份）
-<本 skill 目录>\bin\everything-search-mcp.exe config --target dsh --write
-<本 skill 目录>\bin\everything-search-mcp.exe config --target opencode --name 旧名字 --remove
-<本 skill 目录>\bin\everything-search-mcp.exe config --json     # 机器可读
+```json
+{
+  "mcpServers": {
+    "everything-search": {
+      "command": "<本 skill 目录>\\bin\\everything-search-mcp.exe"
+    }
+  }
+}
 ```
 
-- 默认只处理**本机已存在**的配置文件：`dsh`(DeepSeek Harness) `claude`(Claude Code)
-  `claude-desktop` `codex` `gemini` `cursor` `vscode` `opencode`，外加 `json`（纯打印一段通用块）。
-- 每个被改动的文件先备份成 `<原名>.bak-<UTC 时间戳>Z`；只替换自己那一条条目，
-  其它条目/注释原样保留；重复运行第二次是 no-op。
-- `--remove` 是反向操作：把这一条条目删掉（同样是先备份）。**改了 server 名字时用它**，
-  否则客户端里会同时存在新旧两条，工具被注册两遍。
-- 输出里会顺带探测 Everything 是否可达、当前索引了多少对象。
-- **不带 `--write` / `--remove` 时一个字节都不写**。
-- 更多安装/排错细节见同目录 `INSTALL.md`。
-
-> **给 AI 的提示**：只有当用户明确要求"配置/安装 everything MCP"时才动配置。
-> 判断某个客户端到底有没有配好，用 `config` 的打印模式看，不要凭猜。
-
-## 没有 MCP 时的裸调用（CLI 模式）
-
-同一个 exe 也是命令行工具 —— **不带参数时是 MCP 服务端**（客户端就是这样拉起它的），
-**带子命令时是一次性 CLI**。所以即使 MCP 没装、没配、或当前 agent 不支持 MCP，
-也可以直接用 shell 调：
-
-```
-<本 skill 目录>\bin\everything-search-mcp.exe search "*.py" --path D:\Projects --max 20
-<本 skill 目录>\bin\everything-search-mcp.exe search "*.js" --path D:\Projects --format compact --exclude-noise
-<本 skill 目录>\bin\everything-search-mcp.exe recent --period 1week --path D:\Projects
-<本 skill 目录>\bin\everything-search-mcp.exe count "ext:pdf" --exact-size
-<本 skill 目录>\bin\everything-search-mcp.exe details D:\a\b.rs --preview 20
-<本 skill 目录>\bin\everything-search-mcp.exe config            # 生成 MCP 配置
-<本 skill 目录>\bin\everything-search-mcp.exe --help
-```
-
-常用 flag：`--path` `--category` `--type file|folder` `--max` `--offset` `--sort`
-`--per-parent` `--regex` `--case` `--whole-word` `--match-path` `--total` `--probe`
-`--period` `--ext` `--preview` `--exact-size` `--breakdown` `--json`
-`--url <名字|地址>`（可重复，搜多台机器；见「搜别的机器」）
-
-```powershell
-<exe> servers list                                   # 已登记的机器与开关
-<exe> servers add <名字> <地址> [--disabled]         # 登记（首次默认打开）
-<exe> servers enable|disable|remove <名字>
-<exe> servers path                                   # 配置文件位置
-```
-
-退出码：`0` 成功、`1` 查询失败（错误在 stderr）、`2` 参数错误。
-`--json` 输出结构化结果而非文本。
-
-> **优先用 MCP 工具**（`everything_*`）：它是常驻进程，省去每次启动开销，且结构化字段更全。
-> CLI 是**没有 MCP 时的兜底**，以及在脚本/CI 里用的形态。
-
+配好后确认客户端里出现 5 个 `everything_search*` 工具，就是成功了。
 
 ## 搜别的机器（远程 Everything）
 
@@ -137,13 +92,18 @@ Everything 的 HTTP 接口不限于本机：另一台机器上只要 Everything 
 登记写进 `%APPDATA%\everything-search-mcp\servers.json`，开关会记住（关掉的机器保持关，
 不会每次搜索都去等它超时）：
 
-```powershell
-<exe> servers add workshop http://10.0.0.2:23333     # 登记并打开
-<exe> servers add nas http://10.0.0.3:23333 --disabled
-<exe> servers list                                   # 看登记与开关
-<exe> servers disable workshop                       # 临时摘掉，保留登记
-<exe> servers path                                   # 配置文件在哪
+``配置文件 %APPDATA%\everything-search-mcp\servers.json：
+
+`json
+{
+  "servers": [
+    { "name": "workshop", "url": "http://10.0.0.2:23333", "enabled": true },
+    { "name": "nas",      "url": "http://10.0.0.3:23333", "enabled": false }
+  ]
+}
 ```
+
+加机器 = 加一条；`enabled: false` 保留登记但默认不搜；删条目就是注销。
 
 `local` 是内置的，不用登记；登记它只是给本机一个自己的开关和地址。
 配置文件**每次调用都会重读**，所以改完立刻生效，不用重启 MCP 服务端。
@@ -330,28 +290,22 @@ case:README regex:^README       # 和正则也能共存（函数在 regex: 前�
 | `data` | csv tsv json jsonl ndjson xml sqlite db mdb accdb parquet arrow avro hdf5 feather |
 
 
-## 无 MCP 时的用法（pi 等纯 CLI harness）
+## 没有 MCP 时的兜底：直接问 Everything 的 HTTP 接口
 
-这类 harness 没有 MCP 工具，但有 bash。改用 Everything 命令行 `es.exe`：
+`everything-search-mcp.exe` 只做 MCP，没有命令行模式。装好 MCP 就用工具；没装、或当前环境不支持 MCP 时，
+用这几行直接查 Everything 自己的 HTTP 服务（默认 23333）——够找到文件就行：
 
-```bash
-ES="/c/Users/AlwaysTS/AppData/Local/Everything/es.exe"
-"$ES" -path "D:\proj" "ext:py;md"                                # 秒级列候选
-"$ES" -path "D:\llm" "ext:gguf" -sort size-descending | head -5  # 按大小取 Top-N
-"$ES" -path "D:\llm" "size:>10gb"                                # 按大小过滤
-"$ES" -path "D:\llm" "dm:today"                                  # 今天修改过
+```powershell
+ = Invoke-RestMethod 'http://127.0.0.1:23333/?search=*.pdf&path=D:\Projects&json=1&count=20'
+$r.results | ForEach-Object { $_.full_path }
 ```
 
-**两个实测坑（2026-09-28）**：
+```bash
+curl -s 'http://127.0.0.1:23333/?search=ext:py&path=D:\proj&json=1&count=20' | jq -r '.results[].full_path'
+```
 
-1. **`-sort` 不要和 `-n` 同用**：`-n` 在排序之前就截断，会漏掉真正最大的文件
-   （实测漏掉了 28.5 GB 的最大模型，只返回 27.2/20.2/14 GB）。排序后只用管道截断：
-   `... -sort size-descending | head -N`。
-2. 扩展名过滤用 Everything 搜索语法 `ext:gguf`，**没有 `-ext` 参数**
-   （`-ext gguf` 会被忽略，结果里混进 .cpp/.py 等无关文件）。
+- `search=` Everything 查询语法（`ext:pdf`、`dm:today`、`size:>10gb` 都能用）
+- `path=` 限定目录，`count=` 上限，`json=1` 要结构化结果
+- 结果字段：`full_path`、`size`、`date_modified`、`type`
+- 端口改过时，看 `%APPDATA%\everything-search-mcp\config.json` 的 `http_url`
 
-完整性说明：Everything 依赖索引，若怀疑索引滞后（刚创建/移动的大文件），
-用 `find` 或 `Get-ChildItem -Recurse` 做一次实时校验。
-
-**取 Top-N 的可靠两步法**：先用 `es.exe` 快速列候选（毫秒级），
-再用 `stat`/`ls -l` 核实大小并排序，可完全避开上面的排序坑。

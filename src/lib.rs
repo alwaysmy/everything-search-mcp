@@ -13,11 +13,9 @@
 // whichever one resolves in their own dependency graph.
 pub use serde_json;
 
-pub mod cli;
 pub mod everything;
 pub mod filetype;
 pub mod jsonrpc;
 pub mod plugin;
 pub mod servers;
-pub mod setup;
 pub mod tools;

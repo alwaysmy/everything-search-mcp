@@ -1031,7 +1031,7 @@ impl Handler for Tools {
     }
 
     fn call_tool(&mut self, name: &str, args: &Value) -> Result<ToolOutput, String> {
-        match name {
+        let mut out = match name {
             "everything_search" => self.search(args),
             "everything_find_recent" => self.find_recent(args),
             "everything_file_details" => self.file_details(args),
@@ -1041,10 +1041,58 @@ impl Handler for Tools {
                 "unknown tool: {other}. Available: everything_search, everything_find_recent, \
                  everything_file_details, everything_count_stats, everything_search_batch"
             )),
+        }?;
+
+        // A misspelled argument is otherwise invisible: `max_result` instead of
+        // `max_results` used to run a perfectly valid search with the default page
+        // size. Say it in `warnings` (already a declared field, so clients that
+        // validate structuredContent are unaffected) and in the text.
+        let known: Vec<String> = self
+            .list_tools()
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .and_then(|arr| arr.iter().find(|t| t["name"] == name))
+            .and_then(|t| t["inputSchema"]["properties"].as_object())
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        if let Some(note) = ignored_args_note(args, &known) {
+            out.text.push_str(&format!("\nwarning: {note}\n"));
+            if let Some(w) = out
+                .structured
+                .get_mut("warnings")
+                .and_then(|w| w.as_array_mut())
+            {
+                w.push(serde_json::Value::String(note));
+            }
         }
+        Ok(out)
     }
 }
 
+/// One warning line for arguments this tool does not declare, or `None`.
+///
+/// Kept separate from the dispatch so it can be tested without a live Everything.
+fn ignored_args_note(args: &Value, known: &[String]) -> Option<String> {
+    let sent = args.as_object()?;
+    if known.is_empty() {
+        return None;
+    }
+    let ignored: Vec<&String> = sent
+        .keys()
+        .filter(|k| !known.iter().any(|n| n == *k))
+        .collect();
+    if ignored.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "ignored argument(s) not understood by this tool: {}",
+        ignored
+            .iter()
+            .map(|u| format!("'{u}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
 // ---------------------------------------------------------------- arg helpers
 
 fn s(args: &Value, key: &str) -> String {
@@ -2477,5 +2525,26 @@ mod noise_tests {
 
         let plain = compile(&filters(false)).unwrap();
         assert!(!plain.contains("!path:"), "{plain}");
+    }
+}
+
+#[cfg(test)]
+mod arg_tests {
+    use super::ignored_args_note;
+    use serde_json::json;
+
+    #[test]
+    fn a_misspelled_argument_is_reported_by_name() {
+        let known = vec!["query".to_string(), "max_results".to_string()];
+        let note = ignored_args_note(&json!({"query": "*.md", "max_result": 5}), &known)
+            .expect("a typo produces a note");
+        assert!(note.contains("'max_result'"), "{note}");
+        assert!(!note.contains("'query'"), "{note}");
+    }
+
+    #[test]
+    fn exact_arguments_produce_no_note() {
+        let known = vec!["query".to_string(), "max_results".to_string()];
+        assert!(ignored_args_note(&json!({"query": "*.md", "max_results": 5}), &known).is_none());
     }
 }

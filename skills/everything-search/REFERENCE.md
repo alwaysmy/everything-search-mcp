@@ -4,13 +4,13 @@
 
 ## 配置 MCP（复制一段 JSON）
 
-本版本**不带配置生成器**（CLI 已移除）。各客户端的完整位置和形状见同目录 `INSTALL.md`，最小形态：
+MCP 端点固定是 `http://127.0.0.1:8286/mcp`。各客户端的位置和形状见同目录 `INSTALL.md`，最小形态：
 
 ```json
 {
   "mcpServers": {
     "everything-search": {
-      "command": "<本 skill 目录>\\bin\\everything-search-mcp.exe"
+      "url": "http://127.0.0.1:8286/mcp"
     }
   }
 }
@@ -292,7 +292,7 @@ case:README regex:^README       # 和正则也能共存（函数在 regex: 前�
 
 ## 没有 MCP 时的兜底：直接问 Everything 的 HTTP 接口
 
-`everything-search-mcp.exe` 只做 MCP，没有命令行模式。装好 MCP 就用工具；没装、或当前环境不支持 MCP 时，
+装好 MCP 就用工具；没有 MCP、或当前环境不支持 MCP 时，
 用这几行直接查 Everything 自己的 HTTP 服务（默认 23333）——够找到文件就行：
 
 ```powershell

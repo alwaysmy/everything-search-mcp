@@ -7,8 +7,8 @@ description: "指导 AI 调用 everything-search MCP 工具（Windows 全盘毫�
 # everything-search MCP 使用指南
 
 > 判断该不该用、怎么不踩坑 → 本文。完整参数、HTTP 兜底、**搜别的机器**、类别扩展名表、排错全集 → 同目录 `REFERENCE.md`。
-> **没有 MCP 的环境（pi 之类只有 bash 的 harness）**：`everything-search-mcp.exe` 只做 MCP，不要当命令跑；
-> 直接用四行 curl/PowerShell 查 Everything 的 HTTP 接口，见 `REFERENCE.md` 的「没有 MCP 时的兜底」。
+> **没有 MCP 的环境（pi 之类只有 bash 的 harness）**：直接用四行 curl/PowerShell
+> 查 Everything 的 HTTP 接口，见 `REFERENCE.md` 的「没有 MCP 时的兜底」。
 
 ## 前提：Everything 的 HTTP 服务器必须是开着的
 

@@ -7,14 +7,10 @@ license = "MIT"
 repository = "https://github.com/alwaysmy/everything-search-mcp"
 readme = "README.md"
 
-[[bin]]
-name = "everything-search-mcp"
-path = "src/main.rs"
 
-# Shared implementation. The bin above is the standalone stdio MCP server; the
-# cdylib is the Everything 1.5 plugin, which Everything.exe loads into its own
-# process and which serves MCP from there (same tool layer, same HTTP backend).
-# See src/lib.rs and src/plugin/mod.rs.
+# The Everything 1.5 plugin. Everything.exe loads this DLL into its own process,
+# where it serves the five tools over loopback HTTP. This branch (v3) ships no
+# executable: the stdio server and its CLI live on the v2 branch.
 [lib]
 name = "everything_mcp_core"
 path = "src/lib.rs"

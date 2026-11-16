@@ -1,175 +1,40 @@
-# Build the release binary and put it where the skill and PATH expect it.
+# Build the plugin DLL, install it into Everything, and sync the skill docs.
 #
-#   .\deploy.ps1              build, then deploy
-#   .\deploy.ps1 -NoBuild     deploy whatever is already in target\release
+#   .\deploy.ps1              build, install, sync
+#   .\deploy.ps1 -NoBuild     install whatever is already in target\release
 #
-# The skill directory holds the one real copy: it is what the MCP configs point
-# at, and it is what travels with the skill. `~\.local\bin` gets hard links to it
-# rather than copies, so the bare command name on PATH can never drift from the
-# skill's binary. (A hard link needs both paths on the same volume; on anything
-# else this falls back to a copy.)
+# v3 has no executable: the endpoint lives inside Everything, so installing the
+# DLL *is* the deployment. Needs an elevated PowerShell (the AllowedPlugins write
+# is under HKLM).
 param(
-    [string]$SkillDir = "$env:USERPROFILE\.agents\skills\everything-search",
-    [string]$BinDir = "$env:USERPROFILE\.local\bin",
-    [switch]$NoBuild
+    [switch]$NoBuild,
+    [string]$SkillDir = "$env:USERPROFILE\.agents\skills\everything-search"
 )
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$src = Join-Path $root 'target\release\everything-search-mcp.exe'
-
-# A running MCP server holds its own image open, and DSH respawns it within a
-# second of being killed - so deleting it usually loses the race. Renaming a
-# running executable is allowed on Windows (the mapping follows the file object),
-# so the name is freed by moving the old binary aside instead.
-function Clear-Target([string]$Path) {
-    if (-not (Test-Path $Path)) { return }
-    # The aside name must be unique per deploy. A fixed `.old` collides with the
-    # previous deploy's aside copy, which a running server may still have mapped -
-    # and a mapped file can be neither overwritten nor deleted, so the rename fails
-    # and the whole deploy stops. The sweep at the end collects them once free.
-    $old = "$Path.old-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
-    try {
-        Move-Item $Path $old -Force -ErrorAction Stop
-    } catch {
-        # If the name truly cannot be freed, say so instead of carrying on and
-        # copying over a file that is still executing.
-        throw "cannot replace $Path - it is in use and could not be renamed aside: $($_.Exception.Message)"
-    }
-}
+$dll = Join-Path $root 'target\release\everything_mcp_core.dll'
 
 if (-not $NoBuild) {
-    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        # Fall back to the standard rustup locations instead of one machine's layout.
-        $candidates = @($env:CARGO_HOME, (Join-Path $env:USERPROFILE '.cargo')) |
-            Where-Object { $_ } | ForEach-Object { Join-Path $_ 'bin' }
-        foreach ($bin in $candidates) {
-            if (Test-Path (Join-Path $bin 'cargo.exe')) { $env:PATH = "$bin;$env:PATH"; break }
-        }
-    }
     Push-Location $root
     try { cargo build --release } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with $LASTEXITCODE" }
 }
-if (-not (Test-Path $src)) { throw "no binary at $src - run without -NoBuild first" }
+if (-not (Test-Path $dll)) { throw "no plugin DLL at $dll - run without -NoBuild first" }
 
-$skillExe = Join-Path $SkillDir 'bin\everything-search-mcp.exe'
-New-Item -ItemType Directory -Force -Path (Split-Path $skillExe) | Out-Null
-Clear-Target $skillExe
-Copy-Item $src $skillExe -Force
-Write-Host "skill   $skillExe"
+Write-Host "plugin  $dll"
+& (Join-Path $root 'install-plugin.ps1') -NoBuild
+if ($LASTEXITCODE -ne 0) { throw "install-plugin.ps1 failed with $LASTEXITCODE" }
 
-# Keep the skill copy of SKILL.md in step with the repo. Without this the
-# deployed doc silently drifts from the semantics the binary implements.
-#
-# The skill directory can be a junction into this repo, in which case the source
-# and destination are literally the same file and Copy-Item refuses to overwrite
-# an item with itself. Comparing content first covers both that case and the
-# ordinary already-in-step one, since an identical hash means there is nothing to
-# copy either way.
-$skillMdSrc = Join-Path $root "skills\everything-search\SKILL.md"
-if (Test-Path $skillMdSrc) {
-    $mdDst = Join-Path $SkillDir "SKILL.md"
-    $inStep = $false
-    if (Test-Path $mdDst) {
-        try {
-            $inStep = (Get-FileHash $mdDst -Algorithm SHA256).Hash -eq
-                      (Get-FileHash $skillMdSrc -Algorithm SHA256).Hash
-        } catch {
-            $inStep = $false
-        }
-    }
-    if ($inStep) {
-        Write-Host "skill   $mdDst (already in step)"
-    } else {
-        if (Test-Path $mdDst) {
-            Write-Host "warn    $mdDst differed from the repo copy; overwriting it (git has the history)"
-        }
-        Copy-Item $skillMdSrc $mdDst -Force
-        Write-Host "skill   $mdDst"
+foreach ($f in 'SKILL.md', 'REFERENCE.md', 'INSTALL.md') {
+    $src = Join-Path $root "skills\everything-search\$f"
+    if (Test-Path $SkillDir) {
+        Copy-Item $src (Join-Path $SkillDir $f) -Force
+        Write-Host "skill   $(Join-Path $SkillDir $f)"
     }
 }
 
-# Same treatment for the other docs that belong to the skill: without this they
-# stay at whatever version was installed last, and the deployed skill documents
-# less than the repo does (`REFERENCE.md` would never arrive at all).
-foreach ($doc in 'REFERENCE.md', 'INSTALL.md') {
-    $docSrc = Join-Path $root "skills\everything-search\$doc"
-    if (-not (Test-Path $docSrc)) { continue }
-    $docDst = Join-Path $SkillDir $doc
-    $docInStep = $false
-    if (Test-Path $docDst) {
-        try {
-            $docInStep = (Get-FileHash $docDst -Algorithm SHA256).Hash -eq
-                         (Get-FileHash $docSrc -Algorithm SHA256).Hash
-        } catch { $docInStep = $false }
-    }
-    if ($docInStep) {
-        Write-Host "skill   $docDst (already in step)"
-    } else {
-        Copy-Item $docSrc $docDst -Force
-        Write-Host "skill   $docDst"
-    }
-}
-
-if (Test-Path $BinDir) {
-    foreach ($name in 'everything-search-mcp.exe', 'everything-mcp.exe') {
-        $dst = Join-Path $BinDir $name
-        Clear-Target $dst
-        try {
-            New-Item -ItemType HardLink -Path $dst -Target $skillExe -ErrorAction Stop | Out-Null
-            Write-Host "link    $dst"
-        } catch {
-            Copy-Item $skillExe $dst -Force
-            Write-Host "copy    $dst   (hard link unavailable: $($_.Exception.Message))"
-        }
-    }
-}
-
-# Sweep up the renamed-aside binaries.
-#
-# This usually cannot succeed, and that is worth saying out loud rather than
-# swallowing. The rename-and-relink sequence above leaves the `.old` name and the
-# live name pointing at the SAME file, and a running MCP server has that file
-# mapped as its executable image - Windows refuses to unlink any name for it, so
-# a silent `-ErrorAction SilentlyContinue` here just hid the litter. They are
-# free to delete once nothing is running from that file, which in practice means
-# the next deploy after a restart.
-$blocked = @()
-foreach ($dir in @((Split-Path $skillExe), $BinDir)) {
-    foreach ($f in (Get-ChildItem "$dir\everything*.exe.old*" -Force -ErrorAction SilentlyContinue)) {
-        try {
-            Remove-Item $f.FullName -Force -ErrorAction Stop
-            # Unlinking one of several names for the same file leaves Everything's
-            # index holding a path that no longer exists - the file is still alive
-            # under its other name, so nothing looks removed. A clean create+delete
-            # at that path (a fresh file, no other links) makes the index drop the
-            # entry. Nothing here requires Everything to be running; it only
-            # matters when it is.
-            Set-Content -LiteralPath $f.FullName -Value '' -Encoding ascii -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
-            Write-Host "swept   $($f.FullName)"
-        } catch {
-            $blocked += $f.FullName
-        }
-    }
-}
-if ($blocked.Count -gt 0) {
-    Write-Host ""
-    Write-Host "kept    $($blocked.Count) renamed-aside binarie(s) - a running MCP server still maps them:"
-    $blocked | ForEach-Object { Write-Host "          $_" }
-    Write-Host "        (harmless; they clear on the next deploy after that server restarts)"
-}
-
-Write-Host ""
-
-# Verify the way a client meets it: speak MCP on stdin and ask for the tool list.
-# (The binary has no CLI, so there is no --version or config command to call.)
-$initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy","version":"1"}}}'
-$list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-$payload = (@($initialize, $list) -join "`n") + "`n"
-$reply = ($payload | & $skillExe 2>$null | Out-String) -split "`n" |
-    Where-Object { $_ -match '"id":2' } | Select-Object -First 1
-if (-not $reply) { throw 'deployed binary did not answer tools/list' }
-$tools = ($reply | ConvertFrom-Json).result.tools
-Write-Host ("verified {0} tools via MCP stdio" -f $tools.Count)
+# Nothing to verify from the outside: install-plugin.ps1 already speaks MCP to the
+# endpoint and prints the tool count. A stale exe from v2 may still sit in the
+# skill's bin/ and on PATH; v3 does not use it, and deleting it here would break a
+# stdio config that still points at it.

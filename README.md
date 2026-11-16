@@ -5,14 +5,15 @@ tools. Rust, with **no Python runtime and no `es.exe` subprocess**: queries go
 straight to [voidtools Everything](https://www.voidtools.com/)'s live NTFS index
 over its HTTP server, and answers arrive in about a millisecond.
 
-Two ways to run it, one tool implementation behind both:
+One way to run it in v3: **inside Everything**. A DLL that Everything 1.5 loads into
+its own process, serving the five tools over loopback HTTP at
+`http://127.0.0.1:8286/mcp` — nothing to spawn, nothing to supervise. See
+[PLUGIN.md](PLUGIN.md). (It links Everything's plugin API; it still does not depend
+on the vendor `Everything3_x64.dll` / `Everything64.dll` SDK.)
 
-- **stdio binary** — a client spawns `everything-search-mcp.exe`; portable, works
-  with any MCP client.
-- **Everything 1.5 plugin** — a DLL Everything loads into its own process, which
-  serves the same endpoint on `127.0.0.1:8286` with no child process at all. See
-  [PLUGIN.md](PLUGIN.md). (The plugin links Everything's plugin API; it still does
-  not depend on the vendor `Everything3_x64.dll` / `Everything64.dll` SDK.)
+A client that only speaks stdio needs the **`v2` branch**, which keeps the executable
+and its command line. Here, the fallback is a raw HTTP query against Everything
+itself — see [Fallback](#fallback-query-everything-directly).
 
 It searches this machine by default, and can query Everything instances running on
 other machines too — same tools, one extra `url` argument.
@@ -27,39 +28,41 @@ mcp__everything-search__everything_search_batch
 
 ## Install
 
-There are two things you can install, and you probably want one of them:
-
-| Archive | What is inside | When |
-|---|---|---|
-| `everything-search-skill-<v>.zip` | `everything-search-mcp.exe` + `SKILL.md` + `REFERENCE.md` + `INSTALL.md` + `README.md` + `LICENSE` | the normal case: a client spawns the executable over stdio |
-| `everything-search-plugin-<v>.zip` | `everything_search_mcp64.dll` + `install-plugin.ps1` + `PLUGIN.md` | you want the endpoint to live inside Everything itself |
+| Archive | What is inside |
+|---|---|
+| `everything-search-plugin-<v>.zip` | `everything_search_mcp64.dll` + `install-plugin.ps1` + `PLUGIN.md` |
+| `everything-search-skill-<v>.zip` | the agent skill — `SKILL.md` + `REFERENCE.md` + `INSTALL.md`, no executable |
 
 Both are produced by `.\release.ps1`, which builds and packs them into `dist\`.
-The plugin archive ships the DLL prebuilt on purpose: everything it needs is
-described on this page, but the one thing a user cannot be expected to do is
-install a Rust toolchain to run a file search plugin.
+The plugin archive ships the DLL prebuilt on purpose: the one thing a user cannot
+be expected to do is install a Rust toolchain to run a file search plugin.
 
-**1. Get the binary.** Download `everything-search-mcp.exe` from
-[Releases](https://github.com/alwaysmy/everything-search-mcp/releases), or grab
-`everything-search-skill-<v>.zip`, which is the binary plus the agent-facing skill
-that explains how to use the tools well.
+**1. Install the plugin.** Elevated PowerShell, in the unzipped folder:
 
-**2. Point your clients at it.** Paste one entry — there is no config generator to
-run (the CLI that carried it was removed, see [Why there is no CLI](#why-there-is-no-cli)):
+```powershell
+.\install-plugin.ps1 -NoBuild
+```
+
+It copies the DLL, registers it in `Everything.ini` and `Plugins.ini`, adds it to
+`AllowedPlugins`, restarts Everything and verifies the endpoint. Requirements and
+the allowlist gotcha (semicolons, not commas): [PLUGIN.md](PLUGIN.md).
+
+**2. Point your clients at the URL.** No path, no binary:
 
 ```json
 {
   "mcpServers": {
     "everything-search": {
-      "command": "C:\\path\\to\\everything-search-mcp.exe"
+      "url": "http://127.0.0.1:8286/mcp"
     }
   }
 }
 ```
 
-`skills/everything-search/INSTALL.md` has the file location and the exact shape for
-DeepSeek Harness, Claude Code, Claude Desktop, Codex CLI, Gemini CLI, Cursor, VS Code
-and opencode. Five `everything_search*` tools appearing is the proof it worked.
+`skills/everything-search/INSTALL.md` has the file location and exact shape for
+DeepSeek Harness, Claude Code, Codex CLI, opencode, pi/omp and Kimi Code — the
+clients that accept an HTTP MCP URL. Five `everything_search*` tools appearing is
+the proof it worked.
 
 **3. Requirements.** Windows, Everything installed **and running**, and
 Everything's HTTP server enabled on port `23333`
@@ -73,31 +76,14 @@ Everything's HTTP server enabled on port `23333`
 > allow_file_download=0
 > ```
 
-## Living inside Everything (optional)
+## How it runs
 
-The same server also runs *inside* Everything. This repository builds a plugin DLL
-that Everything 1.5 loads into its own process and that binds a loopback MCP
-endpoint there, so the endpoint exists exactly as long as Everything does —
-nothing to supervise, nothing to respawn after a reboot, no orphan stdio children.
+Everything 1.5 loads the DLL into its own process, so the MCP endpoint binds a
+loopback port there and exists exactly as long as Everything does — nothing to
+supervise, nothing to respawn after a reboot, no child process per client.
 
-Tool calls do not change: they go through the same `everything::Client` over
-Everything's HTTP server. The plugin adds a transport, not a second query path.
-
-Keep the direction straight: **stdio is the transport every MCP client speaks**;
-HTTP is the addition, and a client only uses this endpoint if it takes a URL. The
-executable is not the legacy option and it is not optional — remove it and a
-stdio-only client has nothing to spawn.
-
-What each archive actually contains matters here:
-
-| | contains | for |
-|---|---|---|
-| `everything-search-skill-<v>.zip` | the executable + skill docs | clients that spawn a stdio process |
-| `everything-search-plugin-<v>.zip` | only the DLL + installer + `PLUGIN.md` | Everything loading the endpoint in-process |
-
-The plugin archive ships no executable **by design**: once the DLL is loaded
-nothing shells out to `everything-search-mcp.exe`. Neither archive has a CLI —
-the executable speaks MCP and nothing else.
+Tool calls go through `everything::Client` to Everything's HTTP server on 23333;
+the plugin only decides where the MCP side of that conversation is served.
 
 ### Install
 
@@ -313,15 +299,10 @@ server.
 > (`http://user:password@host:port`) for an instance configured to require them;
 > that path is implemented but not covered by the test suite.
 
-## Why there is no CLI
+## Fallback: query Everything directly
 
-The previous release also took subcommands (`search`, `recent`, `count`, `details`,
-`servers`, `config`). This one does not: two surfaces for the same query drift apart,
-and the tool side kept gaining switches the CLI never learned. That asymmetry was
-found by a regression run, not by reading the code.
-
-For a script, a CI job, or an agent with no MCP support, query Everything's own HTTP
-API directly — it is the same index, four lines, and nothing to install:
+For a script, a CI job, or an agent that cannot speak MCP, query Everything's own
+HTTP API — same index, four lines, nothing to install:
 
 ```powershell
 # the folder goes inside search= (Everything syntax); path_column=1 adds the path
@@ -342,8 +323,7 @@ curl -s -G 'http://127.0.0.1:23333/' \
 `search=` takes Everything query syntax (`ext:pdf`, `dm:today`, `size:>10gb`) and
 the folder, because the API's own `path=` parameter does **not** filter — it returns
 the whole index. `count=` caps the rows, `json=1` asks for structure, `path_column=1`
-adds the directory (without it a row only has `name` and `type`). Older release tags
-still carry the CLI if a script already depends on it.
+adds the directory (without it a row only has `name` and `type`).
 
 ## Accuracy is labelled
 

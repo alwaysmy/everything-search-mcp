@@ -1,10 +1,9 @@
-//! Minimal JSON-RPC 2.0 / MCP stdio server skeleton.
+//! Minimal JSON-RPC 2.0 / MCP request handler.
 //!
-//! Reads newline-delimited JSON-RPC from stdin, writes responses to stdout.
+//! The plugin feeds it one request per HTTP POST (v3 has no stdio loop).
 //! Notifications (no `id`) produce no response, per spec.
 
 use serde_json::{json, Value};
-use std::io::{self, BufRead, Write};
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "everything_search_mcp";
@@ -149,26 +148,4 @@ fn tool_result(text: &str, is_error: bool) -> Value {
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
-}
-
-/// Run the stdin/stdout loop until EOF.
-pub fn serve<H: Handler>(handler: H) -> io::Result<()> {
-    let mut server = Server::new(handler);
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Some(resp) = server.handle_line(&line) {
-            writeln!(out, "{resp}")?;
-            out.flush()?;
-        }
-    }
-    Ok(())
 }

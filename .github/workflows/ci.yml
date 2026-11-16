@@ -33,25 +33,15 @@ jobs:
 
       - name: Unit tests
         run: cargo test --locked
-
-      # The unit tests cover query compilation and rendering. This covers the
-      # binary the way a client meets it: spawn it, speak MCP on stdin, ask for
-      # the tool list. No Everything instance is needed for any of it.
-      - name: MCP smoke test
+      # v3 ships no executable; the thing a release installs is the plugin DLL.
+      # The endpoint itself is covered by tests/plugin_http.rs, which drives it
+      # over a loopback socket without needing Everything.
+      - name: Plugin artefact
         shell: pwsh
         run: |
-          $exe = "target\release\everything-search-mcp.exe"
-          $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}'
-          $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-          $payload = (@($initialize, $list) -join "`n") + "`n"
-          $stdout = $payload | & $exe 2>$null | Out-String
-
-          $reply = ($stdout -split "`n") | Where-Object { $_ -match '"id":2' } | Select-Object -First 1
-          if (-not $reply) { throw "no tools/list reply; raw: $stdout" }
-          $tools = ($reply | ConvertFrom-Json).result.tools
-          if ($tools.Count -ne 5) { throw "expected 5 tools, got $($tools.Count)" }
-          $search = $tools | Where-Object { $_.name -eq 'everything_search' }
-          if (-not $search.inputSchema.properties.exclude_noise) { throw "input schema lost exclude_noise" }
-          if (-not $search.inputSchema.properties.format) { throw "input schema lost format" }
-          if (-not $search.outputSchema.properties.noise_filter) { throw "output schema lost noise_filter" }
-          Write-Host "MCP smoke test passed"
+          $dll = "target\release\everything_mcp_core.dll"
+          if (-not (Test-Path $dll)) { throw "plugin DLL was not built" }
+          Write-Host ("plugin DLL: {0:N0} bytes" -f (Get-Item $dll).Length)
+          if (Test-Path "target\release\everything-search-mcp.exe") {
+            throw "an executable was produced on the v3 branch"
+          }

@@ -7,7 +7,7 @@
 # Two products, because they are installed differently and a user wants one of
 # them, not both:
 #
-#   everything-search-skill-<v>.zip    the stdio MCP server + the agent skill
+#   everything-search-skill-<v>.zip    the agent skill (docs only - v3 has no exe)
 #   everything-search-plugin-<v>.zip   the in-process Everything plugin + installer
 #
 # The plugin archive exists because the plugin is a DLL that Everything loads from
@@ -37,9 +37,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed with $LASTEXITCODE" }
     }
 
-    $exe = Join-Path $root 'target\release\everything-search-mcp.exe'
     $dll = Join-Path $root 'target\release\everything_mcp_core.dll'
-    if (-not (Test-Path $exe)) { throw "no binary at $exe - run without -NoBuild first" }
     if (-not (Test-Path $dll)) { throw "no plugin at $dll - run without -NoBuild first" }
 
     $out = Join-Path $root $OutDir
@@ -60,9 +58,9 @@ try {
         Write-Host ("{0,-40} {1,6} KB" -f $Archive, $size)
     }
 
-    # --- stdio server + skill -------------------------------------------------
+    # --- agent skill (docs only) ----------------------------------------------
+    # v3 ships no executable: the skill explains how to drive the plugin endpoint.
     $skill = Stage 'skill'
-    Copy-Item $exe (Join-Path $skill 'everything-search-mcp.exe')
     Copy-Item (Join-Path $root 'skills\everything-search\SKILL.md') $skill
     Copy-Item (Join-Path $root 'skills\everything-search\REFERENCE.md') $skill
     Copy-Item (Join-Path $root 'skills\everything-search\INSTALL.md') $skill

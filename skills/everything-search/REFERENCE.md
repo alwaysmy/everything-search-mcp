@@ -296,16 +296,23 @@ case:README regex:^README       # 和正则也能共存（函数在 regex: 前�
 用这几行直接查 Everything 自己的 HTTP 服务（默认 23333）——够找到文件就行：
 
 ```powershell
- = Invoke-RestMethod 'http://127.0.0.1:23333/?search=*.pdf&path=D:\Projects&json=1&count=20'
-$r.results | ForEach-Object { $_.full_path }
+# 目录必须写进 search=（Everything 语法）；path_column=1 才会带 path 字段
+$q = 'path:"D:\Projects" *.md'
+$u = "http://127.0.0.1:23333/?search=" + [uri]::EscapeDataString($q) + "&json=1&count=20&path_column=1"
+$r = Invoke-RestMethod $u
+$r.totalResults
+$r.results | ForEach-Object { Join-Path $_.path $_.name }
 ```
 
 ```bash
-curl -s 'http://127.0.0.1:23333/?search=ext:py&path=D:\proj&json=1&count=20' | jq -r '.results[].full_path'
+curl -s -G 'http://127.0.0.1:23333/' \
+  --data-urlencode 'search=path:"D:\Projects" ext:md' \
+  --data 'json=1' --data 'count=20' --data 'path_column=1' |
+  jq -r '.results[] | "\(.path)\\\(.name)"'
 ```
 
-- `search=` Everything 查询语法（`ext:pdf`、`dm:today`、`size:>10gb` 都能用）
-- `path=` 限定目录，`count=` 上限，`json=1` 要结构化结果
-- 结果字段：`full_path`、`size`、`date_modified`、`type`
+- `search=` 吃 Everything 语法（`ext:pdf`、`dm:today`、`size:>10gb`）；**目录也写在这里**，单独传 `path=` 不会过滤
+- `count=` 上限；`json=1` 要结构化；`path_column=1` 补 `path` 字段（否则只有 `name`）
+- 顶层是 `totalResults`，每条结果有 `name` / `path` / `type`
 - 端口改过时，看 `%APPDATA%\everything-search-mcp\config.json` 的 `http_url`
 

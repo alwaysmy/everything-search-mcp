@@ -319,17 +319,26 @@ For a script, a CI job, or an agent with no MCP support, query Everything's own 
 API directly — it is the same index, four lines, and nothing to install:
 
 ```powershell
-$r = Invoke-RestMethod 'http://127.0.0.1:23333/?search=ext:py&path=D:\Projects&json=1&count=20'
-$r.results | ForEach-Object { $_.full_path }
+# the folder goes inside search= (Everything syntax); path_column=1 adds the path
+$q = 'path:"D:\Projects" ext:py'
+$u = "http://127.0.0.1:23333/?search=" + [uri]::EscapeDataString($q) + "&json=1&count=20&path_column=1"
+$r = Invoke-RestMethod $u
+$r.totalResults
+$r.results | ForEach-Object { Join-Path $_.path $_.name }
 ```
 
 ```bash
-curl -s 'http://127.0.0.1:23333/?search=ext:py&path=D:\Projects&json=1&count=20' | jq -r '.results[].full_path'
+curl -s -G 'http://127.0.0.1:23333/' \
+  --data-urlencode 'search=path:"D:\Projects" ext:py' \
+  --data 'json=1' --data 'count=20' --data 'path_column=1' |
+  jq -r '.results[] | "\(.path)\\\(.name)"'
 ```
 
-`search=` takes Everything query syntax (`ext:pdf`, `dm:today`, `size:>10gb`),
-`path=` scopes it, `count=` caps the rows, `json=1` asks for structure. Older
-release tags still carry the CLI if a script already depends on it.
+`search=` takes Everything query syntax (`ext:pdf`, `dm:today`, `size:>10gb`) and
+the folder, because the API's own `path=` parameter does **not** filter — it returns
+the whole index. `count=` caps the rows, `json=1` asks for structure, `path_column=1`
+adds the directory (without it a row only has `name` and `type`). Older release tags
+still carry the CLI if a script already depends on it.
 
 ## Accuracy is labelled
 

@@ -203,9 +203,11 @@ opencode 的写法又不一样：`command` 是**数组**、类型叫 `local`、�
 先确认 Everything 的 HTTP 服务通（不经过 MCP）：
 
 ```powershell
-$r = Invoke-RestMethod 'http://127.0.0.1:23333/?search=*.py&path=D:\Projects&json=1&count=5'
-$r.total            # 有数字就说明索引和端口都正常
-$r.results[0].full_path
+# 目录写进 search=；path_column=1 才会返回 path 字段
+$u = 'http://127.0.0.1:23333/?search=' + [uri]::EscapeDataString('path:"D:\Projects" *.py') + '&json=1&count=5&path_column=1'
+$r = Invoke-RestMethod $u
+$r.totalResults     # 有数字就说明索引和端口都正常
+$r.results | ForEach-Object { Join-Path $_.path $_.name }
 ```
 
 MCP 侧验证：重启客户端后调用 `everything_search`，`query` 填 `*.py`。

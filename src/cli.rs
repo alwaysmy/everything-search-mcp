@@ -103,6 +103,17 @@ fn run(cmd: &str, rest: &[String]) -> i32 {
                 args.insert("category".into(), json!(v));
                 i += 2;
             }),
+            // Same two switches the MCP tools take: the CLI is the documented
+            // fallback, so it should not be the one path missing them.
+            "--format" => need(i, rest, a).map(|v| {
+                args.insert("format".into(), json!(v));
+                i += 2;
+            }),
+            "--exclude-noise" => {
+                args.insert("exclude_noise".into(), json!(true));
+                i += 1;
+                Ok(())
+            }
             "--type" => need(i, rest, a).map(|v| {
                 args.insert("entry_type".into(), json!(v));
                 i += 2;

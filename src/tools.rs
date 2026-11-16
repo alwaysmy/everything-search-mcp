@@ -817,7 +817,7 @@ fn any_has_more(groups: &[Group], offset: usize) -> Option<bool> {
 /// call is byte-for-byte what it was. Several are grouped under a header per machine:
 /// a merged list mixing `D:\...` from two computers is exactly the reading that turns
 /// a remote hit into a local path.
-fn render_groups(groups: &[Group], offset: usize) -> String {
+fn render_groups(groups: &[Group], offset: usize, path: Option<&str>) -> String {
     if groups.len() == 1 {
         let g = &groups[0];
         return match &g.error {
@@ -844,6 +844,16 @@ fn render_groups(groups: &[Group], offset: usize) -> String {
                 out.push_str(&format!("{} matching\n", g.total));
                 if g.items.is_empty() {
                     out.push_str("  (none on this machine)\n");
+                    // A directory that does not exist on that machine answers 0 too.
+                    // Local can be checked for real; for a remote host say what the
+                    // zero would also mean, so it is not read as "empty directory".
+                    if let Some(p) = path.map(str::trim).filter(|p| !p.is_empty()) {
+                        if g.name() == "local" && !Path::new(p).exists() {
+                            out.push_str(&format!("  path not found: {p}\n"));
+                        } else {
+                            out.push_str("  (a missing path on that machine answers 0 as well)\n");
+                        }
+                    }
                 } else {
                     out.push_str(&format_rows(&g.items));
                 }
@@ -1418,7 +1428,7 @@ impl Tools {
                 head.push_str(&format!("match modes: {}\n", match_modes.join(", ")));
             }
             head.push('\n');
-            head.push_str(&render_groups(&groups, offset));
+            head.push_str(&render_groups(&groups, offset, path.as_deref()));
             head
         };
         // Say it loudly: "0 results" from a directory that does not exist is the
@@ -1614,7 +1624,7 @@ impl Tools {
             }
         );
         text.push_str(&format!("effective query: {effective}\n\n"));
-        text.push_str(&render_groups(&groups, 0));
+        text.push_str(&render_groups(&groups, 0, path.as_deref()));
 
         let mut structured = json!({
             "query": extra,

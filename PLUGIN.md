@@ -1,9 +1,11 @@
 # Running the MCP endpoint inside Everything
 
 The default way to use this project is a separate process: a client spawns
-`everything-search-mcp.exe` and speaks MCP over stdio. This page covers the other
-option — a plugin DLL that Everything loads into **its own process**, where it
-serves the same five tools over loopback HTTP.
+`everything-search-mcp.exe` and speaks MCP over stdio — the transport every MCP
+client supports. This page covers the other option — a plugin DLL that Everything
+loads into **its own process**, where it serves the same five tools over loopback
+HTTP. That endpoint only helps clients that accept a URL; it never replaces the
+executable as the universal path.
 
 ```
 client ──HTTP──► 127.0.0.1:8286 (inside Everything.exe)  ──HTTP──► 127.0.0.1:23333

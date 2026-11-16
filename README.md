@@ -83,6 +83,11 @@ nothing to supervise, nothing to respawn after a reboot, no orphan stdio childre
 Tool calls do not change: they go through the same `everything::Client` over
 Everything's HTTP server. The plugin adds a transport, not a second query path.
 
+Keep the direction straight: **stdio is the transport every MCP client speaks**;
+HTTP is the addition, and a client only uses this endpoint if it takes a URL. The
+executable is not the legacy option and it is not optional — remove it and a
+stdio-only client has nothing to spawn.
+
 What each archive actually contains matters here:
 
 | | contains | for |

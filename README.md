@@ -1,10 +1,18 @@
 # everything-search-mcp
 
 Instant whole-disk file search for AI agents on Windows, exposed as five MCP
-tools. A single native executable — **no Python runtime, no `es.exe` subprocess,
-no SDK DLL** — that answers from
-[voidtools Everything](https://www.voidtools.com/)'s live NTFS index in about a
-millisecond.
+tools. Rust, with **no Python runtime and no `es.exe` subprocess**: queries go
+straight to [voidtools Everything](https://www.voidtools.com/)'s live NTFS index
+over its HTTP server, and answers arrive in about a millisecond.
+
+Two ways to run it, one tool implementation behind both:
+
+- **stdio binary** — a client spawns `everything-search-mcp.exe`; portable, works
+  with any MCP client.
+- **Everything 1.5 plugin** — a DLL Everything loads into its own process, which
+  serves the same endpoint on `127.0.0.1:8286` with no child process at all. See
+  [PLUGIN.md](PLUGIN.md). (The plugin links Everything's plugin API; it still does
+  not depend on the vendor `Everything3_x64.dll` / `Everything64.dll` SDK.)
 
 It searches this machine by default, and can query Everything instances running on
 other machines too — same tools, one extra `url` argument.

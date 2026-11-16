@@ -195,7 +195,6 @@ const SEARCH_ARGS: &[&str] = &[
     "match_regex",
     "match_path",
     "max_per_parent",
-    "include_total",
     "probe",
     "url",
 ];
@@ -947,7 +946,6 @@ impl Handler for Tools {
                 "match_path": p_bool("Match the query against the full path instead of the filename", false),
                 "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),
                 "probe": p_bool("Expand a bare term into one engine-side name/path/folder union before counting, sorting and paging. Applies whenever enabled, not just to thin pages. Existing filters and match flags still apply; branches are reported in probes.", false),
-                "include_total": p_bool("Also report the total match count (it is already exact and costs nothing, so this only controls whether the text form mentions it).", false),
                 "url": p_url(&url_desc()),
             }),
             &["query"],
@@ -1388,7 +1386,6 @@ impl Tools {
         let match_whole_word = b(args, "match_whole_word", false);
         let match_path = b(args, "match_path", false);
         let max_per_parent = u(args, "max_per_parent", 0);
-        let include_total = b(args, "include_total", false);
 
         // A malformed pattern is not a search that found nothing, and Everything
         // reports both the same way. Refuse the typo instead of answering it.
@@ -1537,7 +1534,7 @@ impl Tools {
         if let Some(warning) = &path_warning {
             text.insert_str(0, &format!("warning: {warning}\n\n"));
         }
-        if include_total && returned == 0 {
+        if returned == 0 {
             text.push_str(&format!(
                 "Total matches: {total} ({})\n",
                 total_accuracy(&groups)

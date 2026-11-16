@@ -78,9 +78,20 @@ endpoint there, so the endpoint exists exactly as long as Everything does —
 nothing to supervise, nothing to respawn after a reboot, no orphan stdio children.
 
 Tool calls do not change: they go through the same `everything::Client` over
-Everything's HTTP server. The plugin adds a transport, not a second query path,
-and the stdio executable remains the right choice for clients that only speak
-stdio, for one-shot CLI use, and as a fallback when the plugin is not installed.
+Everything's HTTP server. The plugin adds a transport, not a second query path.
+
+What each archive actually contains matters here:
+
+| | contains | one-shot CLI (`everything-search-mcp.exe search …`) |
+|---|---|---|
+| `everything-search-skill-<v>.zip` | the executable + skill docs | ✅ |
+| `everything-search-plugin-<v>.zip` | only the DLL + installer + `PLUGIN.md` | ❌ nothing to run |
+
+The plugin archive ships no executable **by design**: once the DLL is loaded
+nothing shells out to `everything-search-mcp.exe`, so building one would be dead
+weight. The flip side is that a plugin-only install has no CLI fallback — if you
+want `everything-search-mcp.exe search …` for one-off use, or a stdio client,
+take the skill archive (or a checkout) as well.
 
 ### Install
 

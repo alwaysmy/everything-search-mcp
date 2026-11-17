@@ -22,8 +22,11 @@ use crate::filetype;
 use crate::jsonrpc::{Handler, ToolOutput};
 use crate::servers;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 pub struct Tools {
     client: Client,
@@ -282,6 +285,8 @@ fn recent_output_schema() -> Value {
                 "description": "differs from requested_period only when auto_expand widened the window"},
             "expanded": {"type": "boolean",
                 "description": "true when the requested window held too few results and the search was retried across all time"},
+            "format": {"type": "string", "enum": ["detailed", "compact"],
+                "description": "text layout that was used"},
             "total": {"type": "integer"},
             "total_accuracy": {"type": "string", "enum": ["exact", "partial"]},
             "total_scope": {"type": "string", "enum": ["all requested indexes", "reachable indexes"]},
@@ -461,15 +466,55 @@ const NOISE_PATHS: &[&str] = &[
 /// indistinguishable from "this directory really has no matching files" — the one
 /// failure mode this server must not have. The filesystem check is only paid when
 /// the answer is empty, so a normal query never touches the disk.
-fn missing_path_warning(path: Option<&str>, total: u64) -> Option<String> {
-    if total != 0 {
+/// `all_local` must be false whenever any backend in the call was a remote
+/// instance: `path` then names a directory on *that* machine, and checking this
+/// one answers "not found" for a share that exists (Y:\安装包 had 58,708 matches
+/// on ts-always and was still reported missing).
+fn missing_path_warning(path: Option<&str>, total: u64, all_local: bool) -> Option<String> {
+    if total != 0 || !all_local {
         return None;
     }
     let path = path?.trim();
-    if path.is_empty() || Path::new(path).exists() {
+    if path.is_empty() {
         return None;
     }
-    Some(format!("path not found: {path}"))
+    match path_exists_bounded(Path::new(path), Duration::from_millis(200)) {
+        Some(true) => None,
+        // Unknown within the budget: a disconnected mapped drive or dead UNC path
+        // blocks for tens of seconds, and this runs on the empty-result path. Saying
+        // nothing is better than stalling the call; a healthy network share answers
+        // in milliseconds and still gets the warning.
+        None => None,
+        Some(false) => Some(format!("path not found: {path}")),
+    }
+}
+
+/// `path.exists()` with a deadline, because the answer may come from a dead network.
+///
+/// At most two probes may be outstanding: a truly dead share leaves its thread
+/// blocked until the network stack gives up, and without the cap every empty
+/// result would add another one.
+fn path_exists_bounded(path: &Path, budget: Duration) -> Option<bool> {
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    if IN_FLIGHT.fetch_add(1, Ordering::AcqRel) >= 2 {
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        return None;
+    }
+    let owned = path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("path-probe".into())
+        .spawn(move || {
+            let _ = tx.send(owned.exists());
+            IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        });
+    match spawned {
+        Ok(_) => rx.recv_timeout(budget).ok(),
+        Err(_) => {
+            IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+            None
+        }
+    }
 }
 
 /// Compile the typed arguments into one Everything expression.
@@ -486,7 +531,11 @@ fn compile(f: &Filters) -> Result<String, String> {
     }
     if f.noise {
         for excluded in NOISE_PATHS {
-            parts.push(format!("!path:{excluded}"));
+            // Anchored on both separators: `!path:dist` is a plain substring match in
+            // Everything, so it also ate `dist-info`, `distribution` and any other name
+            // containing it - 24,426 folders became 9,745 on a real tree. With the
+            // separators it removes the directory and its contents only.
+            parts.push(format!("!path:\"\\{excluded}\\\""));
         }
     }
     match f.entry_type {
@@ -925,107 +974,7 @@ impl Handler for Tools {
     }
 
     fn list_tools(&self) -> Value {
-        let sort_desc = format!("Sort order. One of: {}", SORT_NAMES.join(", "));
-        let cats = everything::file_type_names();
-        let cats_desc = format!("One of: {}", cats.join(", "));
-
-        let search_schema = schema(
-            json!({
-                "query": p_string("Search query in Everything syntax, e.g. '*.rs', 'ext:py;js', 'size:>10mb', 'dm:today', or a regex when match_regex is set. Space = AND, | = OR, ! excludes. May be empty when a category or entry_type filter alone expresses the intent. Matching is case-insensitive by default; use the search FUNCTIONS instead of the match_* parameters where you can, because functions work in every tool: 'case:README' (case-sensitive), 'wholeword:read' (whole words only), 'exact:name' (whole name). The match_* parameters exist only because functions are unreliable inside a regex.", Some("")),
-                "category": p_enum(&format!("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause. {cats_desc}."), &cats, Some("")),
-                "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
-                "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
-            "exclude_noise": p_bool("Append !path: exclusions for node_modules, .git, .venv, dist, build, target, __pycache__, site-packages. Off by default; turn it on when a broad glob would otherwise be drowned by dependencies.", false),
-            "format": p_enum("Text layout: 'detailed' (default) prints path, size and date per row; 'compact' prints one path per line, which is what you want when feeding many rows into context.", &["detailed", "compact"], Some("detailed")),
-                "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
-                "offset": p_int("Skip N results (pagination)", 0, 0, 2147483647),
-                "sort": p_string(&sort_desc, Some("date-modified-desc")),
-                "match_case": p_bool("Case-sensitive search. Prefer the `case:` search function inside query - it works in every tool, including everything_count_stats and everything_find_recent, which have no match_* parameters. This parameter is for regex searches, where functions are unreliable.", false),
-                "match_whole_word": p_bool("Match whole words only. Prefer the `wholeword:` (or `ww:`) search function inside query, which works in every tool. This parameter is for regex searches.", false),
-                "match_regex": p_bool("Treat query as a regular expression", false),
-                "match_path": p_bool("Match the query against the full path instead of the filename", false),
-                "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),
-                "probe": p_bool("Expand a bare term into one engine-side name/path/folder union before counting, sorting and paging. Applies whenever enabled, not just to thin pages. Existing filters and match flags still apply; branches are reported in probes.", false),
-                "url": p_url(&url_desc()),
-            }),
-            &["query"],
-        );
-
-        let recent_schema = schema(
-            json!({
-                "period": p_string(&format!("How recent. One of: {}. Raw Everything syntax such as 'last2hours' is also accepted.", PERIOD_NAMES.join(", ")), Some("1day")),
-                "path": p_string("Restrict to this directory path", Some("")),
-            "format": p_enum("Text layout: 'detailed' (default) or 'compact' (one path per line).", &["detailed", "compact"], Some("detailed")),
-                "extensions": p_string("Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'", Some("")),
-                "query": p_string("Additional search filter", Some("")),
-                "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
-                "auto_expand": p_bool("When the period yields fewer than max_results hits, retry across all time. The response reports whether this happened via `expanded` and `effective_period`.", true),
-                "url": p_url(&url_desc()),
-            }),
-            &[],
-        );
-
-        let details_schema = schema(
-            json!({
-                "paths": json!({
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Absolute file or folder paths to inspect (1-20).",
-                    "minItems": 1,
-                    "maxItems": 20
-                }),
-                "preview_lines": p_int("Triage preview: at most this many lines, and only for files whose content resolves to text. Use your own file-reading tool for full contents.", 0, 0, 200),
-                "url": p_url(&url_desc_single()),
-            }),
-            &["paths"],
-        );
-
-        let stats_schema = schema(
-            json!({
-                "query": p_string("Search query to count. Same syntax as everything_search.", None),
-                "category": p_enum(&format!("Restrict to a file category. {cats_desc}."), &cats, Some("")),
-                "entry_type": p_enum("Restrict to files or folders.", &["any", "file", "folder"], Some("any")),
-                "path": p_string("Restrict counting to this directory", Some("")),
-            "exclude_noise": p_bool("Append !path: exclusions for node_modules, .git, .venv, dist, build, target, __pycache__, site-packages before counting.", false),
-                "include_size": p_bool("Report total size of matching files. Without exact_size the figure is omitted entirely rather than estimated from a biased sample.", true),
-                "exact_size": p_bool("Sum every match to get an exact total size. Costs one paged pass over the result set, so it is opt-in; refused above 200000 matches. The extension breakdown remains limited to the initial sample.", false),
-                "breakdown_by_extension": p_bool("Break the result set down by extension", false),
-                "sample_sort": p_string("Sort used when sampling for the breakdown. Name sorts are rejected when a breakdown is requested, because filename sort correlates with extension and biases the sample.", Some("date-modified-desc")),
-                "url": p_url(&url_desc()),
-            }),
-            &["query"],
-        );
-
-        json!({"tools": [
-            tool("everything_search",
-                 "Search files and folders by name, extension, size or date using voidtools Everything's real-time NTFS index. Supports a category preset, file/folder filtering, path scoping, paging, sorting, regex and result diversification.",
-                 search_schema, results_output_schema()),
-            tool("everything_find_recent",
-                 "Find files modified within a recent time period - useful for what changed in a project, recent downloads, or today's logs. Sorted newest-first, with optional widening when the window is too narrow.",
-                 recent_schema, recent_output_schema()),
-            tool("everything_file_details",
-                 "Inspect specific paths: metadata plus a resolved type (kind, text-or-binary, format), sniffing the file header only when the extension cannot say. Use it to decide whether a file is worth reading; it is not a replacement for your own file-reading tool.",
-                 details_schema, details_output_schema()),
-            tool("everything_count_stats",
-                 "Count and measure files matching a query without listing them. The count is exact; size and per-extension figures are sampled and labelled as such.",
-                 stats_schema, stats_output_schema()),
-            tool("everything_search_batch",
-                 "Run up to 8 searches in one call and get all the answers back together. Use it when several independent lookups are needed at once (does this project have a Cargo.toml / package.json / pyproject.toml?), to avoid paying an agent round trip per lookup. Each entry takes the same arguments as everything_search, including its own url, so one call can ask several machines.",
-                 schema(
-                     json!({
-                         "queries": json!({
-                             "type": "array",
-                             "description": "1-8 search argument objects; each accepts the everything_search arguments, including its own url.",
-                             "minItems": 1,
-                             "maxItems": 8,
-                             "items": {"type": "object"}
-                         }),
-                         "max_total_results": p_int("Hard maximum number of displayed results across all queries and backends; later queries are skipped when exhausted. Backend overfetch for diversification is separately bounded.", 200, 1, 2000),
-                     }),
-                     &["queries"],
-                 ),
-                 batch_output_schema()),
-        ]})
+        cached_tools().clone()
     }
 
     fn call_tool(&mut self, name: &str, args: &Value) -> Result<ToolOutput, String> {
@@ -1045,14 +994,7 @@ impl Handler for Tools {
         // `max_results` used to run a perfectly valid search with the default page
         // size. Say it in `warnings` (already a declared field, so clients that
         // validate structuredContent are unaffected) and in the text.
-        let known: Vec<String> = self
-            .list_tools()
-            .get("tools")
-            .and_then(|t| t.as_array())
-            .and_then(|arr| arr.iter().find(|t| t["name"] == name))
-            .and_then(|t| t["inputSchema"]["properties"].as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
+        let known = known_arg_names(name);
         if let Some(note) = ignored_args_note(args, &known) {
             out.text.push_str(&format!("\nwarning: {note}\n"));
             if let Some(w) = out
@@ -1486,7 +1428,10 @@ impl Tools {
         }
 
         let total = summed_total(&groups);
-        let path_warning = missing_path_warning(path.as_deref(), total);
+        // A path filter means different things per backend; only this machine can
+        // answer whether it exists.
+        let all_local = groups.iter().all(|g| g.name() == servers::LOCAL);
+        let path_warning = missing_path_warning(path.as_deref(), total, all_local);
         let returned = total_returned(&groups);
         let next = next_cursor(&groups, offset);
         let has_more = any_has_more(&groups, offset);
@@ -1716,6 +1661,13 @@ impl Tools {
         };
 
         let format = s_or(args, "format", "detailed");
+        // Same contract as everything_search: an unknown value is an error, not a
+        // silent fall back to the default.
+        if format != "detailed" && format != "compact" {
+            return Err(format!(
+                "invalid format '{format}'. Valid: detailed, compact"
+            ));
+        }
         let mut text = format!(
             "recent: requested {requested_period}, effective {effective_period}{}\n",
             if expanded {
@@ -1738,6 +1690,7 @@ impl Tools {
             "requested_period": requested_period,
             "effective_period": effective_period,
             "expanded": expanded,
+            "format": format,
             "total": total,
             "total_accuracy": total_accuracy(&groups),
             "total_scope": if total_accuracy(&groups)=="exact" {"all requested indexes"} else {"reachable indexes"},
@@ -2092,7 +2045,10 @@ impl Tools {
         fail_if_sole_backend(&groups)?;
 
         let total = summed_total(&groups);
-        let path_warning = missing_path_warning(path.as_deref(), total);
+        // A path filter means different things per backend; only this machine can
+        // answer whether it exists.
+        let all_local = groups.iter().all(|g| g.name() == servers::LOCAL);
+        let path_warning = missing_path_warning(path.as_deref(), total, all_local);
         let reachable = groups.iter().filter(|g| g.error.is_none()).count();
         let multi = groups.len() > 1;
 
@@ -2489,13 +2445,17 @@ mod path_warning_tests {
         let missing = std::env::temp_dir().join("everything-mcp-no-such-dir-xyz123");
         let missing = missing.to_str().unwrap();
 
-        assert!(missing_path_warning(Some(missing), 0).is_some());
+        assert!(missing_path_warning(Some(missing), 0, true).is_some());
         // A non-empty answer proves the scope existed; no filesystem check needed.
-        assert!(missing_path_warning(Some(missing), 3).is_none());
-        assert!(missing_path_warning(None, 0).is_none());
+        assert!(missing_path_warning(Some(missing), 3, true).is_none());
+        assert!(missing_path_warning(None, 0, true).is_none());
 
         let here = std::env::temp_dir();
-        assert!(missing_path_warning(Some(here.to_str().unwrap()), 0).is_none());
+        assert!(missing_path_warning(Some(here.to_str().unwrap()), 0, true).is_none());
+
+        // A remote scope names a directory on that machine. Y:\安装包 had 58,708
+        // matches there and was still reported missing here.
+        assert!(missing_path_warning(Some(missing), 0, false).is_none());
     }
 }
 
@@ -2517,8 +2477,12 @@ mod noise_tests {
     #[test]
     fn noise_filter_adds_path_exclusions_only_when_asked() {
         let quiet = compile(&filters(true)).unwrap();
-        assert!(quiet.contains("!path:node_modules"), "{quiet}");
-        assert!(quiet.contains("!path:target"), "{quiet}");
+        // Anchored: an unanchored `!path:dist` also eats `dist-info` and
+        // `distribution`, which is how 24,426 folders became 9,745.
+        assert!(quiet.contains("!path:\"\\node_modules\\\""), "{quiet}");
+        assert!(quiet.contains("!path:\"\\target\\\""), "{quiet}");
+        assert!(!quiet.contains("!path:dist "), "{quiet}");
+        assert!(!quiet.contains("!path:node_modules\""), "{quiet}");
 
         let plain = compile(&filters(false)).unwrap();
         assert!(!plain.contains("!path:"), "{plain}");
@@ -2543,5 +2507,157 @@ mod arg_tests {
     fn exact_arguments_produce_no_note() {
         let known = vec!["query".to_string(), "max_results".to_string()];
         assert!(ignored_args_note(&json!({"query": "*.md", "max_results": 5}), &known).is_none());
+    }
+}
+
+/// The five tool definitions, built once.
+///
+/// They are constants, but `call_tool` used to rebuild them on every successful
+/// call just to learn the argument names: ~1.4 ms, 89% of the whole request.
+fn cached_tools() -> &'static Value {
+    static CACHE: OnceLock<Value> = OnceLock::new();
+    CACHE.get_or_init(build_tools)
+}
+
+fn build_tools() -> Value {
+    let sort_desc = format!("Sort order. One of: {}", SORT_NAMES.join(", "));
+    let cats = everything::file_type_names();
+    let cats_desc = format!("One of: {}", cats.join(", "));
+
+    let search_schema = schema(
+        json!({
+            "query": p_string("Search query in Everything syntax, e.g. '*.rs', 'ext:py;js', 'size:>10mb', 'dm:today', or a regex when match_regex is set. Space = AND, | = OR, ! excludes. May be empty when a category or entry_type filter alone expresses the intent. Matching is case-insensitive by default; use the search FUNCTIONS instead of the match_* parameters where you can, because functions work in every tool: 'case:README' (case-sensitive), 'wholeword:read' (whole words only), 'exact:name' (whole name). The match_* parameters exist only because functions are unreliable inside a regex.", Some("")),
+            "category": p_enum(&format!("Restrict to a file category, so extension lists do not have to be written by hand. Adds an ext: clause. {cats_desc}."), &cats, Some("")),
+            "entry_type": p_enum("Restrict to files or folders. Use 'folder' to find directories (projects, install dirs) instead of guessing from results.", &["any", "file", "folder"], Some("any")),
+            "path": p_string("Restrict search to this directory tree. Prefer this over writing path: in the query.", Some("")),
+        "exclude_noise": p_bool("Append !path: exclusions for node_modules, .git, .venv, dist, build, target, __pycache__, site-packages. Off by default; turn it on when a broad glob would otherwise be drowned by dependencies.", false),
+        "format": p_enum("Text layout: 'detailed' (default) prints path, size and date per row; 'compact' prints one path per line, which is what you want when feeding many rows into context.", &["detailed", "compact"], Some("detailed")),
+            "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
+            "offset": p_int("Skip N results (pagination)", 0, 0, 2147483647),
+            "sort": p_string(&sort_desc, Some("date-modified-desc")),
+            "match_case": p_bool("Case-sensitive search. Prefer the `case:` search function inside query - it works in every tool, including everything_count_stats and everything_find_recent, which have no match_* parameters. This parameter is for regex searches, where functions are unreliable.", false),
+            "match_whole_word": p_bool("Match whole words only. Prefer the `wholeword:` (or `ww:`) search function inside query, which works in every tool. This parameter is for regex searches.", false),
+            "match_regex": p_bool("Treat query as a regular expression", false),
+            "match_path": p_bool("Match the query against the full path instead of the filename", false),
+            "max_per_parent": p_int("Diversify results: keep at most N hits per parent directory, so one directory tree cannot fill the whole list. 0 disables it.", 0, 0, 100),
+            "probe": p_bool("Expand a bare term into one engine-side name/path/folder union before counting, sorting and paging. Applies whenever enabled, not just to thin pages. Existing filters and match flags still apply; branches are reported in probes.", false),
+            "url": p_url(&url_desc()),
+        }),
+        &["query"],
+    );
+
+    let recent_schema = schema(
+        json!({
+            "period": p_string(&format!("How recent. One of: {}. Raw Everything syntax such as 'last2hours' is also accepted.", PERIOD_NAMES.join(", ")), Some("1day")),
+            "path": p_string("Restrict to this directory path", Some("")),
+        "format": p_enum("Text layout: 'detailed' (default) or 'compact' (one path per line).", &["detailed", "compact"], Some("detailed")),
+            "extensions": p_string("Filter by extensions, e.g. 'py,js,ts' or 'py;js;ts'", Some("")),
+            "query": p_string("Additional search filter", Some("")),
+            "max_results": p_int("Maximum results to return (1-500). Defaults to 20: a broad query that returns 20 rows already shows the total match count, which is the signal to narrow the query rather than page through it.", 20, 1, 500),
+            "auto_expand": p_bool("When the period yields fewer than max_results hits, retry across all time. The response reports whether this happened via `expanded` and `effective_period`.", true),
+            "url": p_url(&url_desc()),
+        }),
+        &[],
+    );
+
+    let details_schema = schema(
+        json!({
+            "paths": json!({
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Absolute file or folder paths to inspect (1-20).",
+                "minItems": 1,
+                "maxItems": 20
+            }),
+            "preview_lines": p_int("Triage preview: at most this many lines, and only for files whose content resolves to text. Use your own file-reading tool for full contents.", 0, 0, 200),
+            "url": p_url(&url_desc_single()),
+        }),
+        &["paths"],
+    );
+
+    let stats_schema = schema(
+        json!({
+            "query": p_string("Search query to count. Same syntax as everything_search.", None),
+            "category": p_enum(&format!("Restrict to a file category. {cats_desc}."), &cats, Some("")),
+            "entry_type": p_enum("Restrict to files or folders.", &["any", "file", "folder"], Some("any")),
+            "path": p_string("Restrict counting to this directory", Some("")),
+        "exclude_noise": p_bool("Append !path: exclusions for node_modules, .git, .venv, dist, build, target, __pycache__, site-packages before counting.", false),
+            "include_size": p_bool("Report total size of matching files. Without exact_size the figure is omitted entirely rather than estimated from a biased sample.", true),
+            "exact_size": p_bool("Sum every match to get an exact total size. Costs one paged pass over the result set, so it is opt-in; refused above 200000 matches. The extension breakdown remains limited to the initial sample.", false),
+            "breakdown_by_extension": p_bool("Break the result set down by extension", false),
+            "sample_sort": p_string("Sort used when sampling for the breakdown. Name sorts are rejected when a breakdown is requested, because filename sort correlates with extension and biases the sample.", Some("date-modified-desc")),
+            "url": p_url(&url_desc()),
+        }),
+        &["query"],
+    );
+
+    json!({"tools": [
+        tool("everything_search",
+             "Search files and folders by name, extension, size or date using voidtools Everything's real-time NTFS index. Supports a category preset, file/folder filtering, path scoping, paging, sorting, regex and result diversification.",
+             search_schema, results_output_schema()),
+        tool("everything_find_recent",
+             "Find files modified within a recent time period - useful for what changed in a project, recent downloads, or today's logs. Sorted newest-first, with optional widening when the window is too narrow.",
+             recent_schema, recent_output_schema()),
+        tool("everything_file_details",
+             "Inspect specific paths: metadata plus a resolved type (kind, text-or-binary, format), sniffing the file header only when the extension cannot say. Use it to decide whether a file is worth reading; it is not a replacement for your own file-reading tool.",
+             details_schema, details_output_schema()),
+        tool("everything_count_stats",
+             "Count and measure files matching a query without listing them. The count is exact; size and per-extension figures are sampled and labelled as such.",
+             stats_schema, stats_output_schema()),
+        tool("everything_search_batch",
+             "Run up to 8 searches in one call and get all the answers back together. Use it when several independent lookups are needed at once (does this project have a Cargo.toml / package.json / pyproject.toml?), to avoid paying an agent round trip per lookup. Each entry takes the same arguments as everything_search, including its own url, so one call can ask several machines.",
+             schema(
+                 json!({
+                     "queries": json!({
+                         "type": "array",
+                         "description": "1-8 search argument objects; each accepts the everything_search arguments, including its own url.",
+                         "minItems": 1,
+                         "maxItems": 8,
+                         "items": {"type": "object"}
+                     }),
+                     "max_total_results": p_int("Hard maximum number of displayed results across all queries and backends; later queries are skipped when exhausted. Backend overfetch for diversification is separately bounded.", 200, 1, 2000),
+                 }),
+                 &["queries"],
+             ),
+             batch_output_schema()),
+    ]})
+}
+
+/// Argument names for one tool, from the cached definitions.
+fn known_arg_names(tool: &str) -> Vec<String> {
+    static CACHE: OnceLock<HashMap<&'static str, Vec<String>>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let mut map: HashMap<&'static str, Vec<String>> = HashMap::new();
+            if let Some(tools) = cached_tools().get("tools").and_then(|t| t.as_array()) {
+                for t in tools {
+                    let Some(name) = t.get("name").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let keys = t["inputSchema"]["properties"]
+                        .as_object()
+                        .map(|m| m.keys().cloned().collect())
+                        .unwrap_or_default();
+                    map.insert(name, keys);
+                }
+            }
+            map
+        })
+        .get(tool)
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::known_arg_names;
+
+    #[test]
+    fn argument_names_come_from_the_cached_definitions() {
+        let names = known_arg_names("everything_search");
+        assert!(names.iter().any(|n| n == "exclude_noise"), "{names:?}");
+        assert!(names.iter().any(|n| n == "format"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "include_total"), "{names:?}");
+        assert!(known_arg_names("no-such-tool").is_empty());
     }
 }

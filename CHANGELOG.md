@@ -24,7 +24,7 @@ the docs — a reader installing the tool does not need to know what it used to 
 - `exclude_noise` on `everything_search` and `everything_count_stats`: appends
   `!path:` exclusions for `node_modules`, `.git`, `.venv`, `venv`, `dist`, `build`,
   `target`, `__pycache__`, `site-packages`. Measured on `D:\WorkDesigns`, `*.js`:
-  15312 → 1834.
+  15353 → 1905.
 - `format: "compact"` on `everything_search` and `everything_find_recent`: one path
   per line instead of path + size + date.
 - `format` and `noise_filter` fields in the structured result.
@@ -42,6 +42,21 @@ the docs — a reader installing the tool does not need to know what it used to 
 
 ### Fixed
 
+- `exclude_noise` excluded by unanchored substring: `!path:dist` also removed
+  `dist-info` and `distribution` (24,426 folders → 9,745 on a real tree, `*dist-info*`
+  130 → 0). The clauses are now `!path:"\name\"`, which removes the directory and its
+  contents only. Residual: the excluded directory's own row survives (its path has no
+  trailing separator), which only matters for `entry_type: folder`.
+- An empty result scoped to a remote machine reported `path not found` when the path
+  existed there (`Y:\安装包` had 58,708 matches on ts-always). The filesystem check now
+  runs only when every backend is local, and with a 200 ms budget so a dead mapped
+  drive cannot stall the call.
+- `everything_find_recent` accepted `format: "bogus"` silently while
+  `everything_search` rejected it; it now validates and echoes `format`.
+- `call_tool` rebuilt all five tool schemas on every successful call just to read the
+  argument names — ~1.4 ms, 89% of a request, invisible in `elapsed_ms`. The
+  definitions are built once now (`tools/list` 1,650 → 581 µs, a successful call
+  2,221 → 1,031 µs).
 - Output schemas declare `additionalProperties: false` but omitted the new fields,
   so every search and count call failed with
   `-32602 ... data must NOT have additional properties`.

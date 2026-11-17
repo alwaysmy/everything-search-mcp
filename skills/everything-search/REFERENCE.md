@@ -140,7 +140,7 @@ warning: path not found: D:\NoSuchDir
 两个只影响"读起来累不累"的开关，默认都关：
 
 **`exclude_noise: true`** — 在查询里追加 `!path:node_modules`、`.git`、`.venv`、`dist`、`build`、`target`、`__pycache__`、`site-packages` 排除。
-实测 `D:\WorkDesigns` 下 `*.js`：**15312 → 1834**（少 88%）。搜代码时基本都该开。
+实测 `D:\WorkDesigns` 下 `*.js`：**15353 → 1905**（少 88%）。搜代码时基本都该开。排除写成 `!path:"\dist\"`（两侧都带分隔符），所以 `dist-info`、`distribution` 这类名字不会被误伤。
 
 **`format: "compact"`** — 每条只输出一行完整路径，不带宽高尺寸和时间。20 条结果从 60 行降到 20 行。
 

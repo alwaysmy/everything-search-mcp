@@ -448,23 +448,21 @@ client that greps the body for `"Error:"` would need updating.
 ## Development
 
 ```powershell
-cargo build --release      # -> target\release\everything-search-mcp.exe
-cargo test                 # 55 unit + 8 integration tests
-.\deploy.ps1               # build, then install into the skill dir + hard-link onto PATH
-.\deploy.ps1 -NoBuild      # deploy what is already built
+cargo build --release      # -> target\release\everything_mcp_core.dll (the plugin)
+cargo test                 # 61 unit + 12 integration tests, no Everything needed
+.\deploy.ps1               # build, install the plugin, sync the skill docs
+.\deploy.ps1 -NoBuild      # install whatever is already built
 ```
 
-`deploy.ps1` treats the skill directory as the one real copy and makes the names
-on `PATH` **hard links** to it, so they cannot drift. A running MCP server holds
-its own image open, so a redeploy renames the old binary aside rather than
-deleting it (Windows allows renaming a running executable).
+`deploy.ps1` needs an elevated shell: it copies the DLL into Everything's
+`Plugins\` folder, adds the name to the `AllowedPlugins` registry value, restarts
+Everything and verifies the endpoint. Nothing is written to `PATH`.
 
 ```
 Cargo.toml      2 dependencies (serde, serde_json); lto + strip + panic=abort
 deploy.ps1      build and install
 src/
-  main.rs       entry point: MCP stdio server, nothing else
-  jsonrpc.rs    MCP stdio protocol, flat-schema tools, params compat shim
+  jsonrpc.rs    JSON-RPC / MCP request handling, flat-schema tools, params compat shim
   everything.rs addresses, query constants, FILETIME, timezone
   everything/http.rs bounded HTTP framing, size limits and request deadlines
   servers.rs    the instance registry: named Everything servers and their switches

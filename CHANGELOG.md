@@ -50,13 +50,16 @@ the docs — a reader installing the tool does not need to know what it used to 
 - An empty result scoped to a remote machine reported `path not found` when the path
   existed there (`Y:\安装包` had 58,708 matches on ts-always). The filesystem check now
   runs only when every backend is local, and with a 200 ms budget so a dead mapped
-  drive cannot stall the call.
+  drive cannot stall the call. "Local" is decided by the address, not by the registry
+  name: `url: "http://127.0.0.1:23333"` is this machine even though it is labelled
+  `127.0.0.1:23333`, and a remote registered under the name `local` is not.
 - `everything_find_recent` accepted `format: "bogus"` silently while
-  `everything_search` rejected it; it now validates and echoes `format`.
+  `everything_search` rejected it. It validates now, echoes `format`, and does it before
+  the search runs rather than after — a rejected call no longer pays for the query.
 - `call_tool` rebuilt all five tool schemas on every successful call just to read the
-  argument names — ~1.4 ms, 89% of a request, invisible in `elapsed_ms`. The
-  definitions are built once now (`tools/list` 1,650 → 581 µs, a successful call
-  2,221 → 1,031 µs).
+  argument names — ~830 µs of a ~1.5 ms request, invisible in `elapsed_ms`. The
+  definitions are built once now: server-side overhead 1,022 → 191 µs, `tools/list`
+  1,487 → 682 µs.
 - Output schemas declare `additionalProperties: false` but omitted the new fields,
   so every search and count call failed with
   `-32602 ... data must NOT have additional properties`.

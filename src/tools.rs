@@ -804,6 +804,20 @@ fn is_loopback(cfg: &Config) -> bool {
     cfg.host.eq_ignore_ascii_case("localhost") || cfg.host == "::1" || cfg.host.starts_with("127.")
 }
 
+/// Whether every backend in this answer is this machine, so a `path` names a
+/// directory on *this* filesystem and may be probed for existence.
+///
+/// The test is the address rather than the registry name. `everything_file_details`
+/// already decides "may I touch the filesystem" with [`is_loopback`], so a path and
+/// the tool that would read it cannot reach opposite conclusions: registering a
+/// remote instance under the name `local` no longer silences the real warning, and a
+/// local instance registered under any other name still gets it. The cost is the
+/// mirror case — a remote Everything reached through a loopback tunnel looks local
+/// here, which is the limitation `file_details` already has.
+fn all_backends_local(groups: &[Group]) -> bool {
+    groups.iter().all(|g| is_loopback(&g.backend.config))
+}
+
 /// Run one query shape against every instance and collect one group per instance.
 fn gather(backends: &[Backend], q: &Query) -> Vec<Group> {
     everything::query_all(backends, q).into_iter().map(|o| {
@@ -1430,7 +1444,7 @@ impl Tools {
         let total = summed_total(&groups);
         // A path filter means different things per backend; only this machine can
         // answer whether it exists.
-        let all_local = groups.iter().all(|g| g.name() == servers::LOCAL);
+        let all_local = all_backends_local(&groups);
         let path_warning = missing_path_warning(path.as_deref(), total, all_local);
         let returned = total_returned(&groups);
         let next = next_cursor(&groups, offset);
@@ -1551,6 +1565,15 @@ impl Tools {
 
     fn find_recent(&mut self, args: &Value) -> Result<ToolOutput, String> {
         let started = Instant::now();
+        // Validated before anything is queried, exactly as `everything_search` does:
+        // an unknown layout used to be discovered only after the search had already
+        // run, so a typo cost a full scan before being rejected.
+        let format = s_or(args, "format", "detailed");
+        if format != "detailed" && format != "compact" {
+            return Err(format!(
+                "invalid format '{format}'. Valid: detailed, compact"
+            ));
+        }
         let period = s_or(args, "period", "1day");
         // Accept the documented raw Everything syntax (last2hours, last30mins, ...)
         // and the numeric spellings the engine takes (7days, 24hours). Either branch
@@ -1660,14 +1683,6 @@ impl Tools {
             requested_period.clone()
         };
 
-        let format = s_or(args, "format", "detailed");
-        // Same contract as everything_search: an unknown value is an error, not a
-        // silent fall back to the default.
-        if format != "detailed" && format != "compact" {
-            return Err(format!(
-                "invalid format '{format}'. Valid: detailed, compact"
-            ));
-        }
         let mut text = format!(
             "recent: requested {requested_period}, effective {effective_period}{}\n",
             if expanded {
@@ -2047,7 +2062,7 @@ impl Tools {
         let total = summed_total(&groups);
         // A path filter means different things per backend; only this machine can
         // answer whether it exists.
-        let all_local = groups.iter().all(|g| g.name() == servers::LOCAL);
+        let all_local = all_backends_local(&groups);
         let path_warning = missing_path_warning(path.as_deref(), total, all_local);
         let reachable = groups.iter().filter(|g| g.error.is_none()).count();
         let multi = groups.len() > 1;
@@ -2659,5 +2674,72 @@ mod cache_tests {
         assert!(names.iter().any(|n| n == "format"), "{names:?}");
         assert!(!names.iter().any(|n| n == "include_total"), "{names:?}");
         assert!(known_arg_names("no-such-tool").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod local_scope_tests {
+    use super::*;
+
+    /// A port nothing listens on: a request that reaches the backend fails with a
+    /// connection error, so any *other* error message proves the call was rejected
+    /// before the query was attempted.
+    fn offline_tools() -> Tools {
+        Tools {
+            client: Client::new(
+                Config::from_url("http://127.0.0.1:9").expect("the address parses"),
+            ),
+        }
+    }
+
+    fn group(name: &str, url: &str) -> Group {
+        Group {
+            backend: Backend {
+                name: name.to_string(),
+                url: url.to_string(),
+                config: Config::from_url(url).expect("the address parses"),
+            },
+            total: 0,
+            items: Vec::new(),
+            offset: 0,
+            consumed: 0,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn find_recent_refuses_a_bogus_format_before_it_queries() {
+        // The refusal used to happen after the search, so a typo paid for a full
+        // scan before being rejected.
+        let err = match offline_tools()
+            .call_tool("everything_find_recent", &json!({"format": "bogus"}))
+        {
+            Ok(_) => panic!("a bogus layout must be refused"),
+            Err(error) => error,
+        };
+        assert!(err.contains("invalid format"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_path_probe_is_only_allowed_when_every_backend_is_this_machine() {
+        assert!(all_backends_local(&[group(
+            "local",
+            "http://127.0.0.1:23333"
+        )]));
+        // The registry name is not the test: a local instance under any name counts.
+        assert!(all_backends_local(&[group(
+            "this-pc",
+            "http://localhost:23333"
+        )]));
+        assert!(!all_backends_local(&[
+            group("local", "http://127.0.0.1:23333"),
+            group("workshop", "http://10.0.0.2:23333"),
+        ]));
+        // A remote instance registered under the name `local` must not unlock a
+        // check against this machine's filesystem.
+        assert!(!all_backends_local(&[group(
+            "local",
+            "http://10.0.0.2:23333"
+        )]));
     }
 }

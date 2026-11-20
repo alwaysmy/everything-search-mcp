@@ -1,5 +1,5 @@
 //! Bounded HTTP/1.x transport. One deadline covers DNS, connect, write and read.
-//! The stdio dispatcher remains synchronous; this bounds each backend request.
+//! The request dispatcher is synchronous; this bounds each backend request.
 use super::{base64, Config};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};

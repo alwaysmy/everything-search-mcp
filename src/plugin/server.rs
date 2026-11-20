@@ -34,8 +34,9 @@ use crate::jsonrpc::{Handler, Server};
 pub type HandlerFactory<H> = Arc<dyn Fn() -> Server<H> + Send + Sync>;
 
 const MAX_HEAD: usize = 64 * 1024;
-/// Request body cap. MCP `tools/call` payloads are a few hundred bytes; 4 MiB
-/// only created a memory ceiling of `MAX_BODY × MAX_CONNECTIONS`.
+/// Request body cap. MCP `tools/call` payloads are a few hundred bytes, so 256 KiB
+/// is generous; it is also the heap ceiling — `MAX_BODY × MAX_CONNECTIONS` is 64 MiB
+/// only if every slot buffers a maximum body at the same time.
 const MAX_BODY: usize = 256 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 

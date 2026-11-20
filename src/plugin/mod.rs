@@ -1,10 +1,8 @@
 //! In-process Everything 1.5 plugin: the MCP endpoint rides on Everything's
 //! lifetime, the queries stay on the HTTP path.
 //!
-//! `src/main.rs` is the standalone binary — a client spawns it and speaks MCP over
-//! stdio. This library is the same server with a different host: Everything.exe
-//! loads this DLL into its own process, `PM_START` binds a loopback HTTP listener
-//! inside that process, and every tool call runs through the crate's normal
+//! Everything.exe loads this DLL into its own process, `PM_START` binds a loopback
+//! HTTP listener there, and every tool call runs through the crate's normal
 //! [`crate::everything::Client`] against Everything's HTTP server
 //! (`http_server64.dll`, `127.0.0.1:23333`).
 //!
@@ -18,8 +16,8 @@
 //!   door moves from stdin/stdout to a socket.
 //! * No shared server state. Each request builds its own [`Server`] over a copy of
 //!   the config, so a slow tool call cannot delay the ones arriving beside it
-//!   (the stdio front end is inherently one-at-a-time; the socket front end is
-//!   not, and must not simulate it with a lock).
+//!   (a single-client stdio process is inherently one-at-a-time; a socket front end
+//!   is not, and must not simulate it with a lock).
 //! * No `db_*` main-thread problem. The host's database API may only be called on
 //!   Everything's main thread (off-thread calls crash the host with `0xC0000005`),
 //!   so it is deliberately unused here. A faster `db_*` path for the handful of
